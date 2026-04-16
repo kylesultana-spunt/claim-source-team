@@ -273,7 +273,7 @@
           <input id="mc-token" class="form-input" type="password" placeholder="ghp_xxxxxxxxxxxx" onchange="saveToken()" onblur="saveToken()">
           <div style="font-size:10px;color:var(--muted2);margin-top:2px;">Saved in your browser — enter once, never again. Generate at github.com/settings/tokens (repo scope)</div>
         </div>
-        <button class="form-submit" onclick="submitManualClaim()">Add to Fact-Check Queue →</button>
+        <button class="form-submit" onclick="submitManualClaim()">Add to Review Queue →</button>
         <div id="mc-feedback" class="form-feedback"></div>
       </div>
     </div>
@@ -430,13 +430,13 @@ async function submitManualClaim() {
     const newRow = [
       claim, claim, speaker, '', party,
       srcName, srcUrl, today, fetchedAt,
-      'manual', 'checkable', '5',
-      '', 'FALSE', 'FALSE', 'FALSE', 'FALSE', 'FALSE', '',
-      'approved_for_check', 'manual_entry'
-    ].map(v => `"${String(v).replace(/"/g,'""')}"`).join(',');
+      'fact_check', 'manual', 'partially_checkable', '3',
+      '', 'FALSE', 'FALSE', 'FALSE', 'FALSE', 'TRUE', '',
+      'queued_for_review', 'manual_entry'
+    ].map(v => '"' + String(v).replace(/"/g, '""') + '"').join(',');
 
     // Get current file from GitHub API
-    const fileUrl = `https://api.github.com/repos/${GITHUB_USER}/${GITHUB_REPO}/contents/data/fact_check_queue.csv`;
+    const fileUrl = `https://api.github.com/repos/${GITHUB_USER}/${GITHUB_REPO}/contents/data/review_queue.csv`;
     const getRes = await fetch(fileUrl, {
       headers: { 'Authorization': `token ${token}`, 'Accept': 'application/vnd.github.v3+json' }
     });
@@ -474,16 +474,17 @@ async function submitManualClaim() {
       speaker, role: '', party, source_name: srcName,
       source_url: srcUrl, publication_date: today,
       fetched_at: fetchedAt, claim_type: 'manual',
-      verifiability_status: 'checkable', fact_checkability_score: '5',
+      editorial_category: 'fact_check',
+      verifiability_status: 'partially_checkable', fact_checkability_score: '3',
       evidence_target: '', numeric_flag: 'FALSE', legal_flag: 'FALSE',
       comparison_flag: 'FALSE', timeframe_present: 'FALSE',
-      needs_human_review: 'FALSE', rejection_reason: '',
-      status: 'approved_for_check', added_by: 'manual_entry', _queue: 'fact_check',
+      needs_human_review: 'TRUE', rejection_reason: '',
+      status: 'queued_for_review', added_by: 'manual_entry', _queue: 'review',
     });
     updateAll();
 
     fb.className = 'form-feedback success';
-    fb.textContent = '✓ Saved to Fact-Check Queue';
+    fb.textContent = '✓ Saved to Review Queue';
     document.getElementById('mc-claim').value = '';
     document.getElementById('mc-speaker').value = '';
     document.getElementById('mc-source-name').value = '';
