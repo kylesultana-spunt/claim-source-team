@@ -1,13 +1,19 @@
 #!/usr/bin/env python3
 """
-Malta Political Claims - Collector v3
-One core editorial test:
-  Can a journalist verify or disprove this using published statistics,
-  official economic data, budget documents, or historical records?
+Malta Political Claims - Collector v4
+Full article fetching for richer claim extraction.
 
-YES -> fact_check_queue.csv
-BORDERLINE -> review_queue.csv
-NO -> archive.csv (tagged by editorial_category)
+Flow:
+  1. Fetch RSS feeds -> get article URLs
+  2. Quick headline check -> is this political/economic/policy?
+  3. If yes -> fetch full article text
+  4. Send full text to AI -> extract verifiable claims
+  5. Score and route to queues
+
+Routing:
+  fact_check score 4-5  -> fact_check_queue.csv
+  fact_check score 3    -> review_queue.csv
+  everything else       -> archive.csv
 """
 
 import csv
@@ -16,6 +22,7 @@ import os
 import sys
 import time
 import urllib.request
+import urllib.error
 from datetime import datetime, timezone, timedelta
 from email.utils import parsedate_to_datetime
 from xml.etree import ElementTree as ET
@@ -90,73 +97,122 @@ ALL_PEOPLE = {
     "Mario de Marco":          ("PN", "Shadow Minister for Tourism"),
 }
 
-SYSTEM_PROMPT = """You are a senior fact-check editor at a Maltese political newsroom.
+# ── Step 1: Quick political relevance check ────────────────────────────────
 
-You receive a news article headline and summary.
+POLITICAL_KEYWORDS = [
+    "abela", "borg", "caruana", "camilleri", "dalli", "attard",
+    "minister", "government", "parliament", "labour", "nationalist",
+    "opposition", "budget", "deficit", "debt", "gdp", "economy",
+    "inflation", "employment", "pension", "tax", "housing", "rent",
+    "hospital", "mater dei", "health", "education", "environment",
+    "planning", "gozo", "election", "constitutional", "statute",
+    "million", "billion", "percent", "euro", "growth", "spending",
+    "policy", "reform", "law", "regulation", "court", "justice",
+]
 
-STEP 1 - Is this article political or policy-related?
-If not, respond: {"political": false}
+def is_political(title, desc):
+    combined = (title + " " + desc).lower()
+    return any(kw in combined for kw in POLITICAL_KEYWORDS)
 
-STEP 2 - For each statement in the article, apply ONE editorial test:
+# ── Step 2: Fetch full article text ────────────────────────────────────────
 
-THE ONLY TEST THAT MATTERS:
+def fetch_article_text(url, max_chars=5000):
+    """Fetch and clean full article text from URL."""
+    if not url:
+        return None
+    try:
+        req = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0 (compatible; MaltaClaimCollector/4.0)",
+                "Accept": "text/html,application/xhtml+xml",
+            }
+        )
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+
+        # Strip scripts, styles, nav, footer
+        raw = re.sub(r"<script[^>]*>.*?</script>", " ", raw, flags=re.DOTALL | re.IGNORECASE)
+        raw = re.sub(r"<style[^>]*>.*?</style>", " ", raw, flags=re.DOTALL | re.IGNORECASE)
+        raw = re.sub(r"<nav[^>]*>.*?</nav>", " ", raw, flags=re.DOTALL | re.IGNORECASE)
+        raw = re.sub(r"<footer[^>]*>.*?</footer>", " ", raw, flags=re.DOTALL | re.IGNORECASE)
+        raw = re.sub(r"<header[^>]*>.*?</header>", " ", raw, flags=re.DOTALL | re.IGNORECASE)
+        raw = re.sub(r"<aside[^>]*>.*?</aside>", " ", raw, flags=re.DOTALL | re.IGNORECASE)
+
+        # Strip remaining HTML tags
+        text = re.sub(r"<[^>]+>", " ", raw)
+
+        # Clean whitespace
+        text = re.sub(r"\s+", " ", text).strip()
+
+        # Return up to max_chars
+        return text[:max_chars] if len(text) > 100 else None
+
+    except Exception:
+        return None
+
+# ── Step 3: Extract claims from full article text ──────────────────────────
+
+EXTRACTION_SYSTEM_PROMPT = """You are a senior fact-check editor at a Maltese political newsroom.
+
+You will receive the full text of a news article. Your job is to read it carefully
+and extract every verifiable claim — especially ones buried inside the article,
+not just in the headline.
+
+THE ONE TEST THAT MATTERS:
 "Could a journalist verify or disprove this specific claim using published
-statistics, official economic data, budget documents, or historical records?"
+statistics, official economic data, budget documents, historical records,
+legal texts, or official institutional reports?"
 
-EXAMPLES THAT PASS (verifiable with data):
-- "Malta's GDP grew by 4.1% in 2025" -> NSO/Eurostat data
-- "Government debt fell from 70% to 47% of GDP" -> Eurostat fiscal data
-- "Malta has the highest employment rate in the EU" -> Eurostat employment data
-- "The 2026 Budget allocated 9.3 billion euros" -> Budget document
-- "Inflation was 2.5% in 2024" -> NSO inflation statistics
-- "Government revenue rose by 1.2 billion euros last year" -> NSO/Finance Ministry data
-- "Malta will reach UK GDP levels within 2 years" -> verifiable/falsifiable prediction using IMF projections
-- "Ministerial declarations have not been published since 2023" -> official records
-- "The law requires a two-thirds parliamentary majority" -> Constitution/legislation
+EXTRACT these types of claims:
+- Specific numbers and statistics (GDP%, debt ratios, euro amounts, counts)
+- Comparisons with a measurable benchmark (higher than, doubled since, lowest in EU)
+- Timeline facts (deadline passed, law enacted in year X, published since 2023)
+- Legal or constitutional facts (law requires, statute states, Constitution mandates)
+- Administrative facts (government spent X, ministry awarded Y, board appointed Z)
+- Bold specific predictions that are measurable and falsifiable
 
-EXAMPLES THAT FAIL (not verifiable with data):
-- "The Planning Authority approved a redevelopment" -> news event, not a data claim
-- "A recruitment process experienced a 7-month delay" -> administrative report, not a data claim
-- "The local mayor opposed the redevelopment" -> news event
-- "240 objections were filed" -> news event, not an economic/statistical claim
-- "A PN government would cut VAT to 7%" -> conditional future promise
-- "We plan to improve quality of life" -> vague intention
-- "Sources say Abela ruled out May election" -> unnamed source reporting
-- "He failed the people of Malta" -> opinion
+DO NOT EXTRACT:
+- Future promises and conditional proposals (we will, would, plans to, if elected)
+- News events that are not factual claims (planning authority met today)
+- Unnamed source reporting (sources say, it is understood)
+- Opinions, value judgements, slogans
+- Vague statements without a measurable component
 
-STEP 3 - Classify each statement:
+IMPORTANT: Read the FULL article carefully. Claims are often in:
+- Direct quotes from politicians inside the article body
+- Statistics cited in the middle of the article
+- Legal references mentioned in passing
+- Comparisons made by the journalist quoting official data
 
+For each claim, classify it:
 editorial_category options:
-- fact_check: passes the data test above
-- news_event: something that happened, reported as fact, but not verifiable via economic/statistical data
-- proposal: future promise, policy intention, conditional on future event
-- media_report: based on unnamed sources or insider reporting
-- rhetoric: opinion, slogan, attack, value judgement
+- fact_check: passes the data verification test
+- news_event: happened but not data-verifiable
+- proposal: conditional future promise
+- media_report: unnamed source based
+- rhetoric: opinion or slogan
 
-STEP 4 - Score fact_checkability (only for fact_check items):
-5 = precise, specific evidence path (exact data source exists)
-4 = strong, evidence path likely exists
+Score fact_checkability (only for fact_check items):
+5 = precise, specific, clear evidence path exists today
+4 = strong claim, evidence path likely exists
 3 = borderline, needs human judgment
 
-ROUTING (applied internally, do not include in output):
-- fact_check score 4-5 -> fact_check queue
-- fact_check score 3 -> review queue
-- everything else -> archive (tagged with their editorial_category)
+Respond ONLY with valid JSON, no markdown:
 
-Respond ONLY with valid JSON, no markdown, no backticks.
+{"political": false}
 
-If not political: {"political": false}
+OR
 
-If political:
 {"political": true, "claims": [
   {
-    "atomic_claim": "the single cleaned claim exactly as stated",
+    "atomic_claim": "single clean verifiable claim",
     "speaker": "Full Name or unknown",
     "party": "PL or PN or AD+PD or Independent or unknown",
     "editorial_category": "fact_check or news_event or proposal or media_report or rhetoric",
     "claim_type": "statistical or legal or historical or administrative or comparative or predictive or opinion",
     "fact_checkability_score": 5,
-    "evidence_target": "exact source e.g. NSO GDP statistics 2025, Budget 2026 document, Malta Constitution Article 97",
+    "evidence_target": "exact source e.g. NSO GDP statistics 2025, Budget 2026 document, Malta Constitution",
     "numeric_flag": true,
     "legal_flag": false,
     "comparison_flag": false,
@@ -166,10 +222,43 @@ If political:
 ]}
 """
 
+def extract_claims(client, article):
+    """Extract claims from article using full text where available."""
+
+    # Use full article text if we have it, fall back to summary
+    body = article.get("full_text") or article.get("description") or ""
+    title = article.get("title") or ""
+
+    if not body and not title:
+        return []
+
+    # Build prompt with full context
+    text = "HEADLINE: {}\n\nARTICLE TEXT:\n{}".format(title, body)
+
+    try:
+        resp = client.messages.create(
+            model=MODEL,
+            max_tokens=2000,
+            system=EXTRACTION_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": text}],
+        )
+        raw = "".join(b.text for b in resp.content if hasattr(b, "text")).strip()
+        start = raw.find("{")
+        end = raw.rfind("}") + 1
+        if start == -1:
+            return []
+        data = json.loads(raw[start:end])
+        if not data.get("political"):
+            return []
+        return data.get("claims") or []
+    except Exception as e:
+        print("     Parse error: {}".format(e))
+        return []
+
+# ── RSS fetching ───────────────────────────────────────────────────────────
 
 def clean_xml(raw):
     return bytes(b for b in raw if b >= 32 or b in (9, 10, 13))
-
 
 def parse_date(text):
     if not text:
@@ -186,13 +275,12 @@ def parse_date(text):
             pass
     return None
 
-
 def fetch_feed(feed, cutoff):
     articles = []
     try:
         req = urllib.request.Request(
             feed["url"],
-            headers={"User-Agent": "Mozilla/5.0 (compatible; MaltaClaimCollector/3.0)"}
+            headers={"User-Agent": "Mozilla/5.0 (compatible; MaltaClaimCollector/4.0)"}
         )
         with urllib.request.urlopen(req, timeout=15) as resp:
             raw = resp.read()
@@ -218,7 +306,7 @@ def fetch_feed(feed, cutoff):
 
             title = txt("title")
             desc = re.sub(r"<[^>]+>", " ", txt("description") or txt("summary"))
-            desc = re.sub(r"\s+", " ", desc).strip()[:600]
+            desc = re.sub(r"\s+", " ", desc).strip()[:800]
 
             link_el = item.find("link")
             if link_el is not None:
@@ -239,12 +327,13 @@ def fetch_feed(feed, cutoff):
                 continue
 
             articles.append({
-                "title": title,
+                "title":       title,
                 "description": desc,
-                "link": link,
-                "pub_date": pub_date.strftime("%Y-%m-%d") if pub_date else "unknown",
+                "link":        link,
+                "pub_date":    pub_date.strftime("%Y-%m-%d") if pub_date else "unknown",
                 "source_name": feed["name"],
                 "source_note": feed.get("note"),
+                "full_text":   None,
             })
 
         print("     {}: {} articles".format(feed["name"], len(articles)))
@@ -254,31 +343,7 @@ def fetch_feed(feed, cutoff):
 
     return articles
 
-
-def process_article(client, article):
-    text = "Headline: {}\n\nSummary: {}".format(
-        article["title"], article["description"]
-    )
-    try:
-        resp = client.messages.create(
-            model=MODEL,
-            max_tokens=1200,
-            system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": text}],
-        )
-        raw = "".join(b.text for b in resp.content if hasattr(b, "text")).strip()
-        start = raw.find("{")
-        end = raw.rfind("}") + 1
-        if start == -1:
-            return []
-        data = json.loads(raw[start:end])
-        if not data.get("political"):
-            return []
-        return data.get("claims") or []
-    except Exception as e:
-        print("     Parse error: {}".format(e))
-        return []
-
+# ── Routing and saving ─────────────────────────────────────────────────────
 
 def load_existing():
     seen = set()
@@ -295,7 +360,6 @@ def load_existing():
             pass
     return seen
 
-
 def route(claim):
     category = claim.get("editorial_category", "news_event")
     score = int(claim.get("fact_checkability_score") or 1)
@@ -307,9 +371,7 @@ def route(claim):
             return "review"
         return "archive"
 
-    # everything else goes to archive, tagged with its category
     return "archive"
-
 
 def save_claim(claim, article, fetched_at, seen):
     text = claim.get("atomic_claim", "").strip()
@@ -348,28 +410,28 @@ def save_claim(claim, article, fetched_at, seen):
         needs_review = "FALSE"
 
     row = {
-        "claim_text":             article["title"],
-        "atomic_claim":           text,
-        "speaker":                speaker,
-        "role":                   role,
-        "party":                  party,
-        "source_name":            source,
-        "source_url":             article.get("link", ""),
-        "publication_date":       article.get("pub_date", "unknown"),
-        "fetched_at":             fetched_at,
-        "editorial_category":     category,
-        "claim_type":             claim.get("claim_type", ""),
-        "verifiability_status":   verifiability,
+        "claim_text":              article["title"],
+        "atomic_claim":            text,
+        "speaker":                 speaker,
+        "role":                    role,
+        "party":                   party,
+        "source_name":             source,
+        "source_url":              article.get("link", ""),
+        "publication_date":        article.get("pub_date", "unknown"),
+        "fetched_at":              fetched_at,
+        "editorial_category":      category,
+        "claim_type":              claim.get("claim_type", ""),
+        "verifiability_status":    verifiability,
         "fact_checkability_score": score,
-        "evidence_target":        claim.get("evidence_target") or "",
-        "numeric_flag":           claim.get("numeric_flag", False),
-        "legal_flag":             claim.get("legal_flag", False),
-        "comparison_flag":        claim.get("comparison_flag", False),
-        "timeframe_present":      claim.get("timeframe_present", False),
-        "needs_human_review":     needs_review,
-        "rejection_reason":       claim.get("rejection_reason") or "",
-        "status":                 status,
-        "added_by":               "collector",
+        "evidence_target":         claim.get("evidence_target") or "",
+        "numeric_flag":            claim.get("numeric_flag", False),
+        "legal_flag":              claim.get("legal_flag", False),
+        "comparison_flag":         claim.get("comparison_flag", False),
+        "timeframe_present":       claim.get("timeframe_present", False),
+        "needs_human_review":      needs_review,
+        "rejection_reason":        claim.get("rejection_reason") or "",
+        "status":                  status,
+        "added_by":                "collector",
     }
 
     os.makedirs(DATA_DIR, exist_ok=True)
@@ -382,6 +444,7 @@ def save_claim(claim, article, fetched_at, seen):
     seen.add(text.lower())
     return queue
 
+# ── Main ───────────────────────────────────────────────────────────────────
 
 def main():
     if not API_KEY:
@@ -393,12 +456,13 @@ def main():
     cutoff = datetime.now(timezone.utc) - timedelta(hours=LOOKBACK_HRS)
 
     print("=" * 60)
-    print("  Malta Political Claims - Collector v3")
+    print("  Malta Political Claims - Collector v4")
     print("  Run time     : {}".format(fetched_at))
     print("  Looking back : {} hours".format(LOOKBACK_HRS))
     print("  Data folder  : {}".format(DATA_DIR))
     print("=" * 60)
 
+    # Step 1 — Fetch RSS feeds
     print("\n[Step 1] Fetching RSS feeds...")
     all_articles = []
     for feed in RSS_FEEDS:
@@ -411,12 +475,40 @@ def main():
         print("  No articles found.")
         sys.exit(0)
 
-    print("\n[Step 2] Extracting and classifying claims...")
+    # Step 2 — Filter to political articles and fetch full text
+    print("\n[Step 2] Checking relevance and fetching full article text...")
+    political_articles = []
+    for i, article in enumerate(all_articles):
+        if not is_political(article["title"], article["description"]):
+            continue
+
+        # Fetch full article text
+        full_text = fetch_article_text(article["link"])
+        if full_text:
+            article["full_text"] = full_text
+            print("  [{}/{}] {} chars | {}...".format(
+                i+1, len(all_articles),
+                len(full_text),
+                article["title"][:60]
+            ))
+        else:
+            print("  [{}/{}] summary only | {}...".format(
+                i+1, len(all_articles),
+                article["title"][:60]
+            ))
+
+        political_articles.append(article)
+        time.sleep(1)  # polite crawl delay
+
+    print("\n  Political articles: {}".format(len(political_articles)))
+
+    # Step 3 — Extract and classify claims
+    print("\n[Step 3] Extracting claims from full articles...")
     seen = load_existing()
     counts = {"fact_check": 0, "review": 0, "archive": 0}
 
-    for i, article in enumerate(all_articles):
-        claims = process_article(client, article)
+    for i, article in enumerate(political_articles):
+        claims = extract_claims(client, article)
 
         for claim in claims:
             result = save_claim(claim, article, fetched_at, seen)
@@ -428,16 +520,18 @@ def main():
                         claim.get("atomic_claim", "")[:70]
                     ))
 
-        if (i + 1) % 5 == 0 and i + 1 < len(all_articles):
-            time.sleep(8)
+        # Pause every 5 articles to avoid rate limits
+        if (i + 1) % 5 == 0 and i + 1 < len(political_articles):
+            time.sleep(10)
 
     total = sum(counts.values())
     print("\n" + "=" * 60)
-    print("  Articles processed : {}".format(len(all_articles)))
-    print("  Fact-Check Queue   : +{}".format(counts["fact_check"]))
-    print("  Review Queue       : +{}".format(counts["review"]))
-    print("  Archive            : +{}".format(counts["archive"]))
-    print("  Total saved        : {}".format(total))
+    print("  Articles fetched     : {}".format(len(all_articles)))
+    print("  Political articles   : {}".format(len(political_articles)))
+    print("  Fact-Check Queue     : +{}".format(counts["fact_check"]))
+    print("  Review Queue         : +{}".format(counts["review"]))
+    print("  Archive              : +{}".format(counts["archive"]))
+    print("  Total saved          : {}".format(total))
     print("=" * 60)
 
 
