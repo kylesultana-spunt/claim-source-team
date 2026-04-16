@@ -383,6 +383,7 @@ async function loadData() {
     );
 
     allClaims = results.flatMap(r => r.status === 'fulfilled' ? r.value : []);
+    console.log('Total claims loaded:', allClaims.length, results.map(r => r.status === 'fulfilled' ? r.value.length : 'FAILED'));
     updateAll();
     dot.classList.remove('loading');
     label.textContent = 'Updated ' + new Date().toLocaleTimeString();
