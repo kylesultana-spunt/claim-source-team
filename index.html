@@ -444,11 +444,8 @@ async function submitManualClaim() {
     const fileData = await getRes.json();
 
     // Decode, append row, re-encode
-    const currentContent = atob(fileData.content.replace(/
-/g,''));
-    const newContent = currentContent.trimEnd() + '
-' + newRow + '
-';
+    const currentContent = atob(fileData.content.split('\n').join(''));
+    const newContent = currentContent.trimEnd() + '\n' + newRow + '\n';
     const encoded = btoa(unescape(encodeURIComponent(newContent)));
 
     // Commit back
