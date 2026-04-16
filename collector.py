@@ -298,7 +298,7 @@ def load_existing():
 
 def route(claim):
     category = claim.get("editorial_category", "news_event")
-    score = int(claim.get("fact_checkability_score", 1))
+    score = int(claim.get("fact_checkability_score") or 1)
 
     if category == "fact_check":
         if score >= 4:
@@ -331,7 +331,7 @@ def save_claim(claim, article, fetched_at, seen):
     if note:
         source = "{} [{}]".format(source, note)
 
-    score = int(claim.get("fact_checkability_score", 1))
+    score = int(claim.get("fact_checkability_score") or 1)
     category = claim.get("editorial_category", "news_event")
 
     if queue == "fact_check":
