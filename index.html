@@ -322,11 +322,10 @@ const GITHUB_USER = 'GITHUB_USER';
 const GITHUB_REPO = 'GITHUB_REPO';
 const BRANCH      = 'main';
 
-// Using GitHub API which has correct CORS headers for browser fetching
 const CSV_URLS = {
-  fact_check: `https://api.github.com/repos/${GITHUB_USER}/${GITHUB_REPO}/contents/data/fact_check_queue.csv`,
-  review:     `https://api.github.com/repos/${GITHUB_USER}/${GITHUB_REPO}/contents/data/review_queue.csv`,
-  rhetoric:   `https://api.github.com/repos/${GITHUB_USER}/${GITHUB_REPO}/contents/data/rhetoric_archive.csv`,
+  fact_check: `https://raw.githubusercontent.com/${GITHUB_USER}/${GITHUB_REPO}/${BRANCH}/data/fact_check_queue.csv`,
+  review:     `https://raw.githubusercontent.com/${GITHUB_USER}/${GITHUB_REPO}/${BRANCH}/data/review_queue.csv`,
+  rhetoric:   `https://raw.githubusercontent.com/${GITHUB_USER}/${GITHUB_REPO}/${BRANCH}/data/rhetoric_archive.csv`,
 };
 
 // ── State ──────────────────────────────────────────────────────────────────
@@ -374,11 +373,9 @@ async function loadData() {
   try {
     const results = await Promise.allSettled(
       Object.entries(CSV_URLS).map(async ([queue, url]) => {
-        const res  = await fetch(url, { headers: { 'Accept': 'application/vnd.github.v3+json' } });
+        const res  = await fetch(url + '?t=' + Date.now(), { mode: 'cors', cache: 'no-cache' });
         if (!res.ok) return [];
-        const json = await res.json();
-        // GitHub API returns base64-encoded content
-        const text = atob(json.content.replace(/\n/g, ''));
+        const text = await res.text();
         const rows = parseCSV(text);
         rows.forEach(r => r._queue = queue);
         return rows;
