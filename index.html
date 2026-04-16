@@ -1,0 +1,680 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Claim Source Team</title>
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800;900&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:#0d0f14; --bg2:#13161e; --bg3:#1a1e28;
+    --border:#252a38; --border2:#2e3448;
+    --text:#e8eaf2; --muted:#6b7394; --muted2:#444c6a;
+    --amber:#f5a623; --amber-dim:#7a510f; --amber-bg:#1e1608;
+    --blue:#4a9eff; --blue-dim:#1e4a80; --blue-bg:#07111e;
+    --green:#3ddc84; --green-dim:#1a6140; --green-bg:#071410;
+    --red:#ff5f5f; --red-dim:#7a1f1f; --red-bg:#1a0808;
+    --slate:#8892b0; --slate-dim:#3a4260; --slate-bg:#10121a;
+    --font-head:'Montserrat',sans-serif;
+    --font-body:'IBM Plex Sans',sans-serif;
+    --font-mono:'IBM Plex Mono',monospace;
+  }
+  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+  body{background:var(--bg);color:var(--text);font-family:var(--font-body);font-size:14px;line-height:1.6;}
+
+  /* Top bar */
+  .topbar{display:flex;align-items:center;justify-content:space-between;padding:0 24px;height:54px;border-bottom:1px solid var(--border);background:var(--bg);position:sticky;top:0;z-index:100;}
+  .logo{font-family:var(--font-head);font-size:15px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;}
+  .logo span{color:var(--amber);}
+  .divider-v{width:1px;height:20px;background:var(--border2);}
+  .team-tag{font-family:var(--font-mono);font-size:11px;color:var(--muted);letter-spacing:.08em;text-transform:uppercase;}
+  .topbar-left{display:flex;align-items:center;gap:14px;}
+  .topbar-right{display:flex;align-items:center;gap:10px;}
+  .last-run{font-family:var(--font-mono);font-size:11px;color:var(--muted);}
+  .live-dot{width:6px;height:6px;border-radius:50%;background:var(--green);flex-shrink:0;}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+  .live-dot.loading{animation:pulse 1.2s infinite;}
+  .btn-refresh{font-family:var(--font-head);font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;background:var(--amber);color:#000;border:none;padding:7px 16px;cursor:pointer;border-radius:3px;transition:opacity .15s;}
+  .btn-refresh:hover{opacity:.85;}
+
+  /* Layout */
+  .layout{display:flex;height:calc(100vh - 54px);}
+
+  /* Sidebar */
+  .sidebar{width:230px;flex-shrink:0;border-right:1px solid var(--border);display:flex;flex-direction:column;overflow-y:auto;}
+  .sidebar-section{padding:18px 16px 8px;}
+  .sidebar-label{font-family:var(--font-mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted2);margin-bottom:8px;}
+  .queue-item{display:flex;align-items:center;justify-content:space-between;padding:8px 10px;border-radius:4px;cursor:pointer;margin-bottom:2px;transition:background .12s;border:1px solid transparent;}
+  .queue-item:hover{background:var(--bg3);}
+  .queue-item.active{background:var(--bg3);border-color:var(--border2);}
+  .queue-item-left{display:flex;align-items:center;gap:8px;}
+  .queue-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;}
+  .queue-dot.all{background:var(--green);} .queue-dot.amber{background:var(--amber);} .queue-dot.blue{background:var(--blue);} .queue-dot.slate{background:var(--slate);}
+  .queue-name{font-family:var(--font-head);font-size:12px;font-weight:500;}
+  .queue-count{font-family:var(--font-mono);font-size:11px;color:var(--muted);background:var(--bg3);padding:2px 6px;border-radius:10px;border:1px solid var(--border);}
+  .queue-item.active .queue-count{color:var(--text);border-color:var(--border2);}
+  .filter-item{display:flex;align-items:center;gap:8px;padding:5px 10px;border-radius:4px;cursor:pointer;transition:background .12s;font-size:12px;color:var(--muted);}
+  .filter-item:hover{background:var(--bg3);color:var(--text);}
+  .filter-item.active{color:var(--text);}
+  .filter-dot{width:6px;height:6px;border-radius:50%;background:var(--muted2);flex-shrink:0;}
+  .filter-item.pl .filter-dot{background:var(--red);}
+  .filter-item.pn .filter-dot{background:var(--blue);}
+  .score-filters{display:flex;flex-wrap:wrap;gap:4px;padding:0 10px;}
+  .score-pill{font-family:var(--font-mono);font-size:11px;padding:3px 8px;border-radius:10px;border:1px solid var(--border2);cursor:pointer;color:var(--muted);background:transparent;transition:all .12s;}
+  .score-pill:hover{border-color:var(--amber);color:var(--amber);}
+  .score-pill.active{background:var(--amber);color:#000;border-color:var(--amber);font-weight:500;}
+  .type-filter-item{display:flex;align-items:center;gap:8px;padding:5px 10px;border-radius:4px;cursor:pointer;font-size:12px;color:var(--muted);transition:background .12s;}
+  .type-filter-item:hover{background:var(--bg3);color:var(--text);}
+  .type-filter-item.active{color:var(--text);}
+
+  /* Manual form */
+  .manual-form{display:flex;flex-direction:column;gap:8px;}
+  .form-field{display:flex;flex-direction:column;gap:3px;}
+  .form-label{font-family:var(--font-mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted2);}
+  .form-input{background:var(--bg3);border:1px solid var(--border2);border-radius:4px;padding:6px 9px;font-family:var(--font-body);font-size:12px;color:var(--text);outline:none;transition:border-color .15s;width:100%;}
+  .form-input::placeholder{color:var(--muted2);}
+  .form-input:focus{border-color:var(--amber);}
+  .form-textarea{min-height:64px;resize:vertical;line-height:1.5;}
+  .form-select{appearance:none;cursor:pointer;}
+  .form-submit{font-family:var(--font-head);font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;background:var(--amber);color:#000;border:none;padding:8px 12px;border-radius:4px;cursor:pointer;width:100%;transition:opacity .15s;margin-top:2px;}
+  .form-submit:hover{opacity:.85;}
+  .form-feedback{font-size:11px;text-align:center;min-height:16px;}
+  .form-feedback.success{color:var(--green);}
+  .form-feedback.error{color:var(--red);}
+
+  /* Main */
+  .main{flex:1;display:flex;flex-direction:column;overflow:hidden;}
+
+  /* Stats */
+  .stats-row{display:grid;grid-template-columns:repeat(4,1fr);border-bottom:1px solid var(--border);flex-shrink:0;}
+  .stat-card{padding:20px 24px 16px;border-right:1px solid var(--border);position:relative;}
+  .stat-card:last-child{border-right:none;}
+  .stat-card::before{content:'';position:absolute;bottom:0;left:0;right:0;height:2px;}
+  .stat-card.amber::before{background:var(--amber);}
+  .stat-card.blue::before{background:var(--blue);}
+  .stat-card.slate::before{background:var(--slate);}
+  .stat-card.green::before{background:var(--green);}
+  .stat-label{font-family:var(--font-mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:8px;}
+  .stat-num{font-family:var(--font-head);font-size:44px;font-weight:900;line-height:1;letter-spacing:-.02em;display:block;}
+  .stat-card.amber .stat-num{color:var(--amber);}
+  .stat-card.blue .stat-num{color:var(--blue);}
+  .stat-card.slate .stat-num{color:var(--slate);}
+  .stat-card.green .stat-num{color:var(--green);}
+  .stat-sub{font-size:11px;color:var(--muted);margin-top:4px;}
+
+  /* Toolbar */
+  .toolbar{display:flex;align-items:center;gap:10px;padding:10px 20px;border-bottom:1px solid var(--border);flex-shrink:0;}
+  .search-box{flex:1;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;padding:7px 12px;font-family:var(--font-body);font-size:13px;color:var(--text);outline:none;}
+  .search-box::placeholder{color:var(--muted2);}
+  .search-box:focus{border-color:var(--amber);}
+  .result-count{font-family:var(--font-mono);font-size:11px;color:var(--muted);white-space:nowrap;}
+
+  /* Content area */
+  .content-area{display:flex;flex:1;overflow:hidden;}
+  .table-wrap{flex:1;overflow-y:auto;}
+  table{width:100%;border-collapse:collapse;}
+  thead{position:sticky;top:0;z-index:10;}
+  th{font-family:var(--font-mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);text-align:left;padding:9px 14px;background:var(--bg2);border-bottom:1px solid var(--border);white-space:nowrap;cursor:pointer;user-select:none;}
+  th:hover{color:var(--text);}
+  th.sorted{color:var(--amber);}
+  tr.claim-row{border-bottom:1px solid var(--border);cursor:pointer;transition:background .1s;}
+  tr.claim-row:hover{background:var(--bg3);}
+  tr.claim-row.selected{background:var(--bg3);border-left:2px solid var(--amber);}
+  td{padding:10px 14px;vertical-align:middle;}
+  .td-score{font-family:var(--font-mono);font-weight:500;font-size:14px;text-align:center;width:44px;}
+  .score-5{color:var(--green);} .score-4{color:var(--amber);} .score-3{color:var(--blue);} .score-2,.score-1{color:var(--muted);}
+  .td-claim{max-width:360px;}
+  .claim-text-cell{font-size:13px;line-height:1.4;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
+  .td-person{white-space:nowrap;}
+  .person-name{font-size:12px;font-weight:500;}
+  .person-role{font-size:11px;color:var(--muted);margin-top:1px;}
+  .badge{display:inline-block;font-family:var(--font-mono);font-size:10px;font-weight:500;letter-spacing:.05em;padding:2px 6px;border-radius:2px;text-transform:uppercase;}
+  .badge-pl{background:var(--red-bg);color:var(--red);border:1px solid var(--red-dim);}
+  .badge-pn{background:var(--blue-bg);color:var(--blue);border:1px solid var(--blue-dim);}
+  .badge-other{background:var(--slate-bg);color:var(--slate);border:1px solid var(--slate-dim);}
+  .queue-badge{font-family:var(--font-mono);font-size:10px;padding:2px 6px;border-radius:2px;text-transform:uppercase;letter-spacing:.04em;}
+  .queue-badge.fact-check{background:var(--amber-bg);color:var(--amber);border:1px solid var(--amber-dim);}
+  .queue-badge.review{background:var(--blue-bg);color:var(--blue);border:1px solid var(--blue-dim);}
+  .queue-badge.rhetoric{background:var(--slate-bg);color:var(--slate);border:1px solid var(--slate-dim);}
+  .type-tag{font-family:var(--font-mono);font-size:10px;color:var(--muted);}
+  .td-date{font-family:var(--font-mono);font-size:11px;color:var(--muted);white-space:nowrap;}
+  .flag-row{display:flex;gap:3px;margin-top:3px;flex-wrap:wrap;}
+  .flag{font-family:var(--font-mono);font-size:9px;padding:1px 4px;border-radius:2px;border:1px solid var(--border2);color:var(--muted2);text-transform:uppercase;}
+  .flag.on{color:var(--green);border-color:var(--green-dim);background:var(--green-bg);}
+
+  /* Detail panel */
+  .detail-panel{width:360px;flex-shrink:0;border-left:1px solid var(--border);display:flex;flex-direction:column;overflow-y:auto;}
+  .detail-panel.empty{align-items:center;justify-content:center;}
+  .detail-empty-msg{font-family:var(--font-mono);font-size:11px;color:var(--muted2);text-align:center;letter-spacing:.06em;text-transform:uppercase;}
+  .detail-header{padding:18px 20px 14px;border-bottom:1px solid var(--border);flex-shrink:0;}
+  .detail-claim{font-family:var(--font-head);font-size:14px;font-weight:600;line-height:1.45;}
+  .detail-body{padding:18px 20px;display:flex;flex-direction:column;gap:16px;}
+  .detail-section-label{font-family:var(--font-mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted2);margin-bottom:6px;}
+  .detail-val{font-size:13px;line-height:1.5;}
+  .detail-val a{color:var(--blue);text-decoration:none;font-size:12px;word-break:break-all;}
+  .detail-val a:hover{text-decoration:underline;}
+  .score-bar{display:flex;align-items:center;gap:8px;margin-top:4px;}
+  .score-bar-track{flex:1;height:4px;background:var(--bg3);border-radius:2px;overflow:hidden;}
+  .score-bar-fill{height:100%;border-radius:2px;}
+  .score-large{font-family:var(--font-mono);font-size:22px;font-weight:500;}
+  .flags-detail{display:flex;flex-wrap:wrap;gap:5px;}
+  .flag-detail{font-family:var(--font-mono);font-size:11px;padding:3px 8px;border-radius:3px;border:1px solid var(--border2);color:var(--muted2);text-transform:uppercase;}
+  .flag-detail.on{color:var(--green);border-color:var(--green-dim);background:var(--green-bg);}
+  .evidence-box{background:var(--bg3);border:1px solid var(--border2);border-radius:4px;padding:8px 12px;font-size:13px;line-height:1.5;}
+  .original-text{background:var(--bg3);border-left:2px solid var(--border2);padding:8px 12px;font-size:12px;color:var(--muted);line-height:1.6;font-style:italic;border-radius:0 4px 4px 0;}
+
+  /* Empty state */
+  .empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:60px 40px;text-align:center;gap:10px;}
+  .empty-state-title{font-family:var(--font-head);font-size:15px;font-weight:700;color:var(--muted);}
+  .empty-state-sub{font-size:12px;color:var(--muted2);max-width:280px;line-height:1.6;}
+
+  ::-webkit-scrollbar{width:4px;height:4px;}
+  ::-webkit-scrollbar-track{background:transparent;}
+  ::-webkit-scrollbar-thumb{background:var(--border2);border-radius:2px;}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-left">
+    <div class="logo">Claim <span>Source</span> Team</div>
+    <div class="divider-v"></div>
+    <div class="team-tag">Malta Political Claims Pipeline</div>
+  </div>
+  <div class="topbar-right">
+    <div class="live-dot loading" id="live-dot"></div>
+    <div class="last-run" id="last-run-label">Loading...</div>
+    <button class="btn-refresh" onclick="loadData()">↻ Refresh</button>
+  </div>
+</header>
+
+<div class="layout">
+  <nav class="sidebar">
+    <div class="sidebar-section">
+      <div class="sidebar-label">Queues</div>
+      <div class="queue-item active" onclick="setQueue('all',this)">
+        <div class="queue-item-left"><div class="queue-dot all"></div><div class="queue-name">All Claims</div></div>
+        <div class="queue-count" id="count-all">0</div>
+      </div>
+      <div class="queue-item" onclick="setQueue('fact_check',this)">
+        <div class="queue-item-left"><div class="queue-dot amber"></div><div class="queue-name">Fact-Check Queue</div></div>
+        <div class="queue-count" id="count-fc">0</div>
+      </div>
+      <div class="queue-item" onclick="setQueue('review',this)">
+        <div class="queue-item-left"><div class="queue-dot blue"></div><div class="queue-name">Review Queue</div></div>
+        <div class="queue-count" id="count-rv">0</div>
+      </div>
+      <div class="queue-item" onclick="setQueue('rhetoric',this)">
+        <div class="queue-item-left"><div class="queue-dot slate"></div><div class="queue-name">Rhetoric Archive</div></div>
+        <div class="queue-count" id="count-rh">0</div>
+      </div>
+    </div>
+
+    <div class="sidebar-section">
+      <div class="sidebar-label">Party</div>
+      <div class="filter-item all-party active" onclick="setParty('all',this)"><div class="filter-dot"></div>All parties</div>
+      <div class="filter-item pl" onclick="setParty('PL',this)"><div class="filter-dot"></div>PL — Government</div>
+      <div class="filter-item pn" onclick="setParty('PN',this)"><div class="filter-dot"></div>PN — Opposition</div>
+      <div class="filter-item" onclick="setParty('other',this)"><div class="filter-dot"></div>Other / Independent</div>
+    </div>
+
+    <div class="sidebar-section">
+      <div class="sidebar-label">Score</div>
+      <div class="score-filters">
+        <div class="score-pill active" onclick="setScore('all',this)">All</div>
+        <div class="score-pill" onclick="setScore('5',this)">5</div>
+        <div class="score-pill" onclick="setScore('4',this)">4</div>
+        <div class="score-pill" onclick="setScore('3',this)">3</div>
+        <div class="score-pill" onclick="setScore('2',this)">2</div>
+        <div class="score-pill" onclick="setScore('1',this)">1</div>
+      </div>
+    </div>
+
+    <div class="sidebar-section">
+      <div class="sidebar-label">Claim Type</div>
+      <div id="type-filters"></div>
+    </div>
+
+    <div class="sidebar-section" style="padding-bottom:20px;">
+      <div class="sidebar-label">Add Claim Manually</div>
+      <div class="manual-form">
+        <div class="form-field">
+          <div class="form-label">Claim *</div>
+          <textarea id="mc-claim" class="form-input form-textarea" placeholder="Enter the claim..."></textarea>
+        </div>
+        <div class="form-field">
+          <div class="form-label">Who said it *</div>
+          <input id="mc-speaker" class="form-input" type="text" placeholder="e.g. Robert Abela">
+        </div>
+        <div class="form-field">
+          <div class="form-label">Party</div>
+          <select id="mc-party" class="form-input form-select">
+            <option value="">— select —</option>
+            <option value="PL">PL</option>
+            <option value="PN">PN</option>
+            <option value="AD+PD">AD+PD</option>
+            <option value="Independent">Independent</option>
+          </select>
+        </div>
+        <div class="form-field">
+          <div class="form-label">Source name</div>
+          <input id="mc-source-name" class="form-input" type="text" placeholder="e.g. Times of Malta">
+        </div>
+        <div class="form-field">
+          <div class="form-label">Source URL</div>
+          <input id="mc-source-url" class="form-input" type="text" placeholder="https://...">
+        </div>
+        <div class="form-field">
+          <div class="form-label">Date</div>
+          <input id="mc-date" class="form-input" type="date">
+        </div>
+        <div class="form-field">
+          <div class="form-label">GitHub Token *</div>
+          <input id="mc-token" class="form-input" type="password" placeholder="ghp_xxxxxxxxxxxx" onchange="saveToken()" onblur="saveToken()">
+          <div style="font-size:10px;color:var(--muted2);margin-top:2px;">Saved in your browser — enter once, never again. Generate at github.com/settings/tokens (repo scope)</div>
+        </div>
+        <button class="form-submit" onclick="submitManualClaim()">Add to Fact-Check Queue →</button>
+        <div id="mc-feedback" class="form-feedback"></div>
+      </div>
+    </div>
+  </nav>
+
+  <main class="main">
+    <div class="stats-row">
+      <div class="stat-card amber"><div class="stat-label">Fact-Check Queue</div><span class="stat-num" id="stat-fc">0</span><div class="stat-sub">Ready for verification</div></div>
+      <div class="stat-card blue"><div class="stat-label">Review Queue</div><span class="stat-num" id="stat-rv">0</span><div class="stat-sub">Awaiting human triage</div></div>
+      <div class="stat-card slate"><div class="stat-label">Rhetoric Archive</div><span class="stat-num" id="stat-rh">0</span><div class="stat-sub">Logged, not actionable</div></div>
+      <div class="stat-card green"><div class="stat-label">Total Claims</div><span class="stat-num" id="stat-total">0</span><div class="stat-sub">Across all queues</div></div>
+    </div>
+
+    <div class="toolbar">
+      <input class="search-box" type="text" id="search-input" placeholder="Search claims, speakers, evidence targets…" oninput="renderTable()">
+      <div class="result-count" id="result-count">— claims</div>
+    </div>
+
+    <div class="content-area">
+      <div class="table-wrap" id="table-wrap">
+        <div class="empty-state" id="empty-state">
+          <div class="empty-state-title">Loading claims...</div>
+          <div class="empty-state-sub">Fetching latest data from the repository.</div>
+        </div>
+        <table id="claims-table" style="display:none;">
+          <thead>
+            <tr>
+              <th onclick="sortBy('fact_checkability_score')" id="th-score">Score</th>
+              <th onclick="sortBy('atomic_claim')" id="th-claim">Claim</th>
+              <th onclick="sortBy('speaker')" id="th-speaker">Speaker</th>
+              <th onclick="sortBy('party')" id="th-party">Party</th>
+              <th onclick="sortBy('_queue')" id="th-queue">Queue</th>
+              <th onclick="sortBy('claim_type')" id="th-type">Type</th>
+              <th onclick="sortBy('publication_date')" id="th-date">Date</th>
+            </tr>
+          </thead>
+          <tbody id="table-body"></tbody>
+        </table>
+      </div>
+      <div class="detail-panel empty" id="detail-panel">
+        <div class="detail-empty-msg">Select a claim<br>to view details</div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script>
+// ── Configuration ──────────────────────────────────────────────────────────
+// IMPORTANT: Replace GITHUB_USER and GITHUB_REPO with your actual values
+const GITHUB_USER = 'kylesultana-spunt';
+const GITHUB_REPO = 'claim-source-team';
+const BRANCH      = 'main';
+
+const CSV_URLS = {
+  fact_check: '/data/fact_check_queue.csv',
+  review:     '/data/review_queue.csv',
+  rhetoric:   '/data/rhetoric_archive.csv',
+};
+
+// ── State ──────────────────────────────────────────────────────────────────
+let allClaims   = [];
+let activeQueue = 'all';
+let activeParty = 'all';
+let activeScore = 'all';
+let activeType  = 'all';
+let sortCol     = 'fact_checkability_score';
+let sortDir     = -1;
+let selectedIdx = null;
+window._filteredRows = [];
+
+// ── CSV Parser ─────────────────────────────────────────────────────────────
+function parseCSV(text) {
+  const lines = text.trim().split('\n');
+  if (lines.length < 2) return [];
+  const headers = parseRow(lines[0]);
+  return lines.slice(1).map(line => {
+    const vals = parseRow(line);
+    const obj = {};
+    headers.forEach((h, i) => obj[h.trim()] = (vals[i] || '').trim());
+    return obj;
+  }).filter(r => r.atomic_claim);
+}
+function parseRow(line) {
+  const result = []; let cur = '', inQ = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (c === '"') { if (inQ && line[i+1] === '"') { cur += '"'; i++; } else inQ = !inQ; }
+    else if (c === ',' && !inQ) { result.push(cur); cur = ''; }
+    else cur += c;
+  }
+  result.push(cur);
+  return result;
+}
+
+// ── Data loading ───────────────────────────────────────────────────────────
+async function loadData() {
+  const dot   = document.getElementById('live-dot');
+  const label = document.getElementById('last-run-label');
+  dot.classList.add('loading');
+  label.textContent = 'Loading...';
+
+  try {
+    const results = await Promise.allSettled(
+      Object.entries(CSV_URLS).map(async ([queue, url]) => {
+        const res  = await fetch(url + '?t=' + Date.now(), { cache: 'no-store' });
+        if (!res.ok) return [];
+        const raw  = await res.text();
+        // Strip BOM and normalise
+        const text = raw.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+        console.log('CSV preview:', JSON.stringify(text.slice(0, 200)));
+        const rows = parseCSV(text);
+        rows.forEach(r => r._queue = queue);
+        return rows;
+      })
+    );
+
+    allClaims = results.flatMap(r => r.status === 'fulfilled' ? r.value : []);
+    console.log('Total claims loaded:', allClaims.length, results.map(r => r.status === 'fulfilled' ? r.value.length : 'FAILED'));
+    updateAll();
+    dot.classList.remove('loading');
+    label.textContent = 'Updated ' + new Date().toLocaleTimeString();
+
+  } catch (e) {
+    dot.classList.remove('loading');
+    label.textContent = 'Error loading data';
+  }
+}
+
+// ── Manual claim (commits directly to fact_check_queue.csv via GitHub API) ──
+async function submitManualClaim() {
+  const claim   = document.getElementById('mc-claim').value.trim();
+  const speaker = document.getElementById('mc-speaker').value.trim();
+  const party   = document.getElementById('mc-party').value.trim();
+  const srcName = document.getElementById('mc-source-name').value.trim();
+  const srcUrl  = document.getElementById('mc-source-url').value.trim();
+  const date    = document.getElementById('mc-date').value.trim();
+  const token   = document.getElementById('mc-token') ? document.getElementById('mc-token').value.trim() : '';
+  const fb      = document.getElementById('mc-feedback');
+  const btn     = document.querySelector('.form-submit');
+
+  if (!claim)   { fb.className='form-feedback error'; fb.textContent='Claim text required.'; return; }
+  if (!speaker) { fb.className='form-feedback error'; fb.textContent='Speaker required.'; return; }
+  if (!token)   { fb.className='form-feedback error'; fb.textContent='GitHub token required.'; return; }
+
+  btn.disabled = true;
+  fb.className = 'form-feedback';
+  fb.textContent = 'Saving...';
+
+  try {
+    const today = date || new Date().toISOString().slice(0,10);
+    const fetchedAt = new Date().toISOString().slice(0,16).replace('T',' ') + ' UTC';
+
+    // Build new CSV row
+    const newRow = [
+      claim, claim, speaker, '', party,
+      srcName, srcUrl, today, fetchedAt,
+      'manual', 'checkable', '5',
+      '', 'FALSE', 'FALSE', 'FALSE', 'FALSE', 'FALSE', '',
+      'approved_for_check', 'manual_entry'
+    ].map(v => `"${String(v).replace(/"/g,'""')}"`).join(',');
+
+    // Get current file from GitHub API
+    const fileUrl = `https://api.github.com/repos/${GITHUB_USER}/${GITHUB_REPO}/contents/data/fact_check_queue.csv`;
+    const getRes = await fetch(fileUrl, {
+      headers: { 'Authorization': `token ${token}`, 'Accept': 'application/vnd.github.v3+json' }
+    });
+    if (!getRes.ok) throw new Error('Could not read CSV: ' + getRes.status);
+    const fileData = await getRes.json();
+
+    // Decode, append row, re-encode
+    const currentContent = atob(fileData.content.replace(/
+/g,''));
+    const newContent = currentContent.trimEnd() + '
+' + newRow + '
+';
+    const encoded = btoa(unescape(encodeURIComponent(newContent)));
+
+    // Commit back
+    const putRes = await fetch(fileUrl, {
+      method: 'PUT',
+      headers: {
+        'Authorization': `token ${token}`,
+        'Accept': 'application/vnd.github.v3+json',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        message: `Manual claim: ${speaker} — ${claim.slice(0,50)}`,
+        content: encoded,
+        sha: fileData.sha
+      })
+    });
+
+    if (!putRes.ok) {
+      const err = await putRes.json();
+      throw new Error(err.message || 'Commit failed');
+    }
+
+    // Add to local view immediately
+    allClaims.push({
+      claim_text: claim, atomic_claim: claim,
+      speaker, role: '', party, source_name: srcName,
+      source_url: srcUrl, publication_date: today,
+      fetched_at: fetchedAt, claim_type: 'manual',
+      verifiability_status: 'checkable', fact_checkability_score: '5',
+      evidence_target: '', numeric_flag: 'FALSE', legal_flag: 'FALSE',
+      comparison_flag: 'FALSE', timeframe_present: 'FALSE',
+      needs_human_review: 'FALSE', rejection_reason: '',
+      status: 'approved_for_check', added_by: 'manual_entry', _queue: 'fact_check',
+    });
+    updateAll();
+
+    fb.className = 'form-feedback success';
+    fb.textContent = '✓ Saved to Fact-Check Queue';
+    document.getElementById('mc-claim').value = '';
+    document.getElementById('mc-speaker').value = '';
+    document.getElementById('mc-source-name').value = '';
+    document.getElementById('mc-source-url').value = '';
+    document.getElementById('mc-date').value = '';
+    document.getElementById('mc-party').value = '';
+
+  } catch(e) {
+    fb.className = 'form-feedback error';
+    fb.textContent = 'Error: ' + e.message;
+  }
+
+  btn.disabled = false;
+}
+
+// ── Filters ────────────────────────────────────────────────────────────────
+function setQueue(q, el) {
+  activeQueue = q;
+  document.querySelectorAll('.queue-item').forEach(x => x.classList.remove('active'));
+  el.classList.add('active');
+  selectedIdx = null; renderTable(); showDetail(null);
+}
+function setParty(p, el) {
+  activeParty = p;
+  document.querySelectorAll('.filter-item').forEach(x => x.classList.remove('active'));
+  el.classList.add('active'); renderTable();
+}
+function setScore(s, el) {
+  activeScore = s;
+  document.querySelectorAll('.score-pill').forEach(x => x.classList.remove('active'));
+  el.classList.add('active'); renderTable();
+}
+function setType(t, el) {
+  activeType = t;
+  document.querySelectorAll('.type-filter-item').forEach(x => x.classList.remove('active'));
+  el.classList.add('active'); renderTable();
+}
+
+// ── Sorting ────────────────────────────────────────────────────────────────
+function sortBy(col) {
+  if (sortCol === col) sortDir *= -1; else { sortCol = col; sortDir = -1; }
+  const idMap = {fact_checkability_score:'score',atomic_claim:'claim',speaker:'speaker',
+    party:'party',_queue:'queue',claim_type:'type',publication_date:'date'};
+  document.querySelectorAll('th').forEach(t => t.classList.remove('sorted'));
+  const th = document.getElementById('th-'+(idMap[col]||col));
+  if (th) th.classList.add('sorted');
+  renderTable();
+}
+
+// ── Filtered data ──────────────────────────────────────────────────────────
+function getFiltered() {
+  const search = (document.getElementById('search-input').value||'').toLowerCase();
+  return allClaims.filter(c => {
+    if (activeQueue !== 'all' && c._queue !== activeQueue) return false;
+    if (activeParty !== 'all') {
+      if (activeParty === 'other') { if (c.party==='PL'||c.party==='PN') return false; }
+      else if (c.party !== activeParty) return false;
+    }
+    if (activeScore !== 'all' && String(c.fact_checkability_score) !== activeScore) return false;
+    if (activeType !== 'all' && c.claim_type !== activeType) return false;
+    if (search) {
+      const hay = [c.atomic_claim,c.speaker,c.role,c.evidence_target,c.claim_type].join(' ').toLowerCase();
+      if (!hay.includes(search)) return false;
+    }
+    return true;
+  }).sort((a,b) => {
+    let av = a[sortCol]||'', bv = b[sortCol]||'';
+    if (sortCol==='fact_checkability_score'){av=+av||0;bv=+bv||0;}
+    if (av<bv) return -sortDir; if (av>bv) return sortDir; return 0;
+  });
+}
+
+// ── Render table ───────────────────────────────────────────────────────────
+function renderTable() {
+  const rows = getFiltered();
+  document.getElementById('result-count').textContent = rows.length+' claim'+(rows.length!==1?'s':'');
+  const emptyState = document.getElementById('empty-state');
+  const table      = document.getElementById('claims-table');
+  if (allClaims.length === 0) { emptyState.style.display='flex'; table.style.display='none'; return; }
+  emptyState.style.display='none'; table.style.display='table';
+
+  const tbody = document.getElementById('table-body');
+  tbody.innerHTML = rows.map((c,i) => {
+    const score = +c.fact_checkability_score||0;
+    const pb = c.party==='PL'?'badge-pl':c.party==='PN'?'badge-pn':'badge-other';
+    const qc = c._queue==='fact_check'?'fact-check':c._queue==='review'?'review':'rhetoric';
+    const ql = c._queue==='fact_check'?'Fact-Check':c._queue==='review'?'Review':'Rhetoric';
+    const flags = [{k:'numeric_flag',l:'NUM'},{k:'legal_flag',l:'LEG'},{k:'comparison_flag',l:'CMP'},{k:'timeframe_present',l:'TIME'}]
+      .map(f=>'<span class="flag '+(String(c[f.k]).toLowerCase()==='true'?'on':'')+'">'+ f.l+'</span>').join('');
+    return '<tr class="claim-row'+(selectedIdx===i?' selected':'')+'" onclick="selectRow('+i+',this)">'
+      +'<td class="td-score"><span class="score-'+score+'">'+(score||'—')+'</span></td>'
+      +'<td class="td-claim"><div class="claim-text-cell">'+esc(c.atomic_claim)+'</div><div class="flag-row">'+flags+'</div></td>'
+      +'<td class="td-person"><div class="person-name">'+esc(c.speaker)+'</div><div class="person-role">'+esc(c.role)+'</div></td>'
+      +'<td><span class="badge '+pb+'">'+esc(c.party)+'</span></td>'
+      +'<td><span class="queue-badge '+qc+'">'+ql+'</span></td>'
+      +'<td><span class="type-tag">'+esc(c.claim_type)+'</span></td>'
+      +'<td class="td-date">'+esc(c.publication_date)+'</td></tr>';
+  }).join('');
+  window._filteredRows = rows;
+}
+
+function selectRow(i, el) {
+  document.querySelectorAll('.claim-row').forEach(r => r.classList.remove('selected'));
+  el.classList.add('selected'); selectedIdx = i; showDetail(window._filteredRows[i]);
+}
+
+// ── Detail panel ───────────────────────────────────────────────────────────
+function showDetail(c) {
+  const panel = document.getElementById('detail-panel');
+  if (!c) { panel.classList.add('empty'); panel.innerHTML='<div class="detail-empty-msg">Select a claim<br>to view details</div>'; return; }
+  panel.classList.remove('empty');
+  const score = +c.fact_checkability_score||0;
+  const sc = score>=4?'var(--amber)':score===3?'var(--blue)':'var(--muted)';
+  const qc = c._queue==='fact_check'?'fact-check':c._queue==='review'?'review':'rhetoric';
+  const ql = c._queue==='fact_check'?'Fact-Check Queue':c._queue==='review'?'Review Queue':'Rhetoric Archive';
+  const fh = [{k:'numeric_flag',l:'Numeric'},{k:'legal_flag',l:'Legal'},{k:'comparison_flag',l:'Comparison'},{k:'timeframe_present',l:'Timeframe'}]
+    .map(f=>'<span class="flag-detail '+(String(c[f.k]).toLowerCase()==='true'?'on':'')+'">'+ f.l+'</span>').join('');
+
+  panel.innerHTML =
+    '<div class="detail-header"><div style="margin-bottom:10px"><span class="queue-badge '+qc+'">'+ql+'</span></div>'
+    +'<div class="detail-claim">'+esc(c.atomic_claim)+'</div></div>'
+    +'<div class="detail-body">'
+    +'<div><div class="detail-section-label">Score</div><div class="score-bar">'
+    +'<div class="score-large" style="color:'+sc+'">'+score+'</div>'
+    +'<div class="score-bar-track"><div class="score-bar-fill" style="width:'+(score/5*100)+'%;background:'+sc+'"></div></div>'
+    +'<div style="font-family:var(--font-mono);font-size:11px;color:var(--muted)">/5</div></div></div>'
+    +'<div><div class="detail-section-label">Speaker</div>'
+    +'<div class="detail-val" style="font-weight:600">'+esc(c.speaker)+'</div>'
+    +'<div class="detail-val" style="color:var(--muted);font-size:12px">'+esc(c.role)+'</div>'
+    +'<div style="margin-top:5px"><span class="badge '+(c.party==='PL'?'badge-pl':c.party==='PN'?'badge-pn':'badge-other')+'">'+esc(c.party)+'</span></div></div>'
+    +'<div><div class="detail-section-label">Classification</div>'
+    +'<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">'
+    +'<span class="type-tag" style="font-size:12px">'+esc(c.claim_type)+'</span>'
+    +'<span style="font-family:var(--font-mono);font-size:11px;color:var(--muted)">'+esc(c.verifiability_status)+'</span>'
+    +(c.rejection_reason?'<span style="font-family:var(--font-mono);font-size:10px;color:var(--red);background:var(--red-bg);padding:2px 5px;border-radius:2px">'+esc(c.rejection_reason)+'</span>':'')
+    +'</div></div>'
+    +'<div><div class="detail-section-label">Flags</div><div class="flags-detail">'+fh+'</div></div>'
+    +(c.evidence_target?'<div><div class="detail-section-label">Evidence target</div><div class="evidence-box">'+esc(c.evidence_target)+'</div></div>':'')
+    +'<div><div class="detail-section-label">Source</div>'
+    +'<div class="detail-val">'+esc(c.source_name)+'</div>'
+    +(c.source_url?'<div class="detail-val"><a href="'+esc(c.source_url)+'" target="_blank">'+esc(c.source_url)+'</a></div>':'')
+    +'<div class="detail-val" style="color:var(--muted);font-size:12px">'+esc(c.publication_date)+'</div></div>'
+    +(c.claim_text&&c.claim_text!==c.atomic_claim?'<div><div class="detail-section-label">Original headline</div><div class="original-text">'+esc(c.claim_text)+'</div></div>':'')
+    +'</div>';
+}
+
+// ── Update all stats ───────────────────────────────────────────────────────
+function updateAll() {
+  const fc=allClaims.filter(c=>c._queue==='fact_check').length;
+  const rv=allClaims.filter(c=>c._queue==='review').length;
+  const rh=allClaims.filter(c=>c._queue==='rhetoric').length;
+  const total=allClaims.length;
+  document.getElementById('stat-fc').textContent=fc;
+  document.getElementById('stat-rv').textContent=rv;
+  document.getElementById('stat-rh').textContent=rh;
+  document.getElementById('stat-total').textContent=total;
+  document.getElementById('count-all').textContent=total;
+  document.getElementById('count-fc').textContent=fc;
+  document.getElementById('count-rv').textContent=rv;
+  document.getElementById('count-rh').textContent=rh;
+  const types=[...new Set(allClaims.map(c=>c.claim_type).filter(Boolean))].sort();
+  const tf=document.getElementById('type-filters');
+  tf.innerHTML='<div class="type-filter-item active" onclick="setType(\'all\',this)"><div class="filter-dot"></div>All types</div>'
+    +types.map(t=>'<div class="type-filter-item" onclick="setType(\''+t+'\',this)"><div class="filter-dot"></div>'+t+'</div>').join('');
+  renderTable();
+}
+
+function esc(s) {
+  if (!s) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ── Token persistence ─────────────────────────────────────────────────────
+function saveToken() {
+  const t = document.getElementById('mc-token').value.trim();
+  if (t) localStorage.setItem('cst_github_token', t);
+}
+
+function loadToken() {
+  const t = localStorage.getItem('cst_github_token');
+  if (t) {
+    const el = document.getElementById('mc-token');
+    if (el) el.value = t;
+  }
+}
+
+// ── Init ───────────────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => { loadData(); loadToken(); });
+</script>
+</body>
+</html>
