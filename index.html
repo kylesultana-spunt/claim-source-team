@@ -375,7 +375,10 @@ async function loadData() {
       Object.entries(CSV_URLS).map(async ([queue, url]) => {
         const res  = await fetch(url + '?t=' + Date.now(), { cache: 'no-store' });
         if (!res.ok) return [];
-        const text = await res.text();
+        const raw  = await res.text();
+        // Strip BOM and normalise
+        const text = raw.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+        console.log('CSV preview:', JSON.stringify(text.slice(0, 200)));
         const rows = parseCSV(text);
         rows.forEach(r => r._queue = queue);
         return rows;
