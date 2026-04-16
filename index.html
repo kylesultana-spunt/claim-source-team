@@ -323,9 +323,9 @@ const GITHUB_REPO = 'claim-source-team';
 const BRANCH      = 'main';
 
 const CSV_URLS = {
-  fact_check: `https://raw.githubusercontent.com/${GITHUB_USER}/${GITHUB_REPO}/${BRANCH}/data/fact_check_queue.csv`,
-  review:     `https://raw.githubusercontent.com/${GITHUB_USER}/${GITHUB_REPO}/${BRANCH}/data/review_queue.csv`,
-  rhetoric:   `https://raw.githubusercontent.com/${GITHUB_USER}/${GITHUB_REPO}/${BRANCH}/data/rhetoric_archive.csv`,
+  fact_check: '/data/fact_check_queue.csv',
+  review:     '/data/review_queue.csv',
+  rhetoric:   '/data/rhetoric_archive.csv',
 };
 
 // ── State ──────────────────────────────────────────────────────────────────
@@ -373,7 +373,7 @@ async function loadData() {
   try {
     const results = await Promise.allSettled(
       Object.entries(CSV_URLS).map(async ([queue, url]) => {
-        const res  = await fetch(url + '?t=' + Date.now(), { mode: 'cors', cache: 'no-cache' });
+        const res  = await fetch(url + '?t=' + Date.now(), { cache: 'no-store' });
         if (!res.ok) return [];
         const text = await res.text();
         const rows = parseCSV(text);
