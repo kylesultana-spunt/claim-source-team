@@ -1,22 +1,13 @@
 #!/usr/bin/env python3
 """
-Malta Political Claims - Collector v2
-Editorial-grade extraction with LLM classification.
+Malta Political Claims - Collector v3
+One core editorial test:
+  Can a journalist verify or disprove this using published statistics,
+  official economic data, budget documents, or historical records?
 
-Five editorial categories:
-  fact_check           - verifiable claim about present/past/future reality
-  proposal_announcement - conditional promise, policy intention, vague plan
-  reasoning_review     - not false but flawed framing, selective omission, misleading causation
-  media_source_report  - unnamed source reporting, cannot verify at capture
-  rhetoric             - opinion, slogan, attack, value judgement
-
-Routing:
-  fact_check (score 4-5)        -> fact_check_queue.csv
-  fact_check (score 3)          -> review_queue.csv
-  reasoning_review              -> review_queue.csv
-  media_source_report           -> review_queue.csv (if time-sensitive, else excluded)
-  proposal_announcement         -> excluded (not a fact-check item)
-  rhetoric                      -> rhetoric_archive.csv
+YES -> fact_check_queue.csv
+BORDERLINE -> review_queue.csv
+NO -> archive.csv (tagged by editorial_category)
 """
 
 import csv
@@ -48,7 +39,7 @@ DATA_DIR = os.environ.get(
 OUTPUT_FILES = {
     "fact_check": os.path.join(DATA_DIR, "fact_check_queue.csv"),
     "review":     os.path.join(DATA_DIR, "review_queue.csv"),
-    "rhetoric":   os.path.join(DATA_DIR, "rhetoric_archive.csv"),
+    "archive":    os.path.join(DATA_DIR, "archive.csv"),
 }
 
 CSV_COLUMNS = [
@@ -101,122 +92,78 @@ ALL_PEOPLE = {
 
 SYSTEM_PROMPT = """You are a senior fact-check editor at a Maltese political newsroom.
 
-You receive a news article headline and summary. Your job is editorial triage.
+You receive a news article headline and summary.
 
 STEP 1 - Is this article political or policy-related?
-If no, respond: {"political": false}
+If not, respond: {"political": false}
 
-STEP 2 - Extract individual statements from the article.
-For each statement, apply the following editorial test:
+STEP 2 - For each statement in the article, apply ONE editorial test:
 
-THE CORE TEST: Does this statement contain a TESTABLE PROPOSITION?
-A testable proposition is something that can be confirmed or refuted against
-publicly available evidence - numbers, records, laws, official data, or observable reality.
+THE ONLY TEST THAT MATTERS:
+"Could a journalist verify or disprove this specific claim using published
+statistics, official economic data, budget documents, or historical records?"
 
-This applies regardless of tense. A future-tense claim CAN be testable if it is
-specific, measurable, and falsifiable.
+EXAMPLES THAT PASS (verifiable with data):
+- "Malta's GDP grew by 4.1% in 2025" -> NSO/Eurostat data
+- "Government debt fell from 70% to 47% of GDP" -> Eurostat fiscal data
+- "Malta has the highest employment rate in the EU" -> Eurostat employment data
+- "The 2026 Budget allocated 9.3 billion euros" -> Budget document
+- "Inflation was 2.5% in 2024" -> NSO inflation statistics
+- "Government revenue rose by 1.2 billion euros last year" -> NSO/Finance Ministry data
+- "Malta will reach UK GDP levels within 2 years" -> verifiable/falsifiable prediction using IMF projections
+- "Ministerial declarations have not been published since 2023" -> official records
+- "The law requires a two-thirds parliamentary majority" -> Constitution/legislation
 
-TESTABLE (extract these):
-- "Malta's GDP doubled in 10 years" - specific, measurable, verifiable
-- "Debt fell from 70% to 47% of GDP" - specific, measurable, verifiable
-- "Malta grew faster than any EU country last year" - comparative, measurable
-- "The law requires a two-thirds majority" - legal fact, verifiable
-- "Ministerial declarations have not been published since 2023" - administrative, verifiable
-- "Malta will reach UK GDP levels within 2 years" - bold specific prediction, falsifiable
-- "Government revenue rose by 1.2 billion euros" - statistical, verifiable
-- "The constitutional deadline passed in March 2026" - timeline, verifiable
+EXAMPLES THAT FAIL (not verifiable with data):
+- "The Planning Authority approved a redevelopment" -> news event, not a data claim
+- "A recruitment process experienced a 7-month delay" -> administrative report, not a data claim
+- "The local mayor opposed the redevelopment" -> news event
+- "240 objections were filed" -> news event, not an economic/statistical claim
+- "A PN government would cut VAT to 7%" -> conditional future promise
+- "We plan to improve quality of life" -> vague intention
+- "Sources say Abela ruled out May election" -> unnamed source reporting
+- "He failed the people of Malta" -> opinion
 
-NOT TESTABLE (do not extract these as fact_check):
-- "A PN government would reduce VAT to 7 percent for restaurants" - conditional on future event not yet happened
-- "We plan to build a new hospital" - vague intention, no benchmark
-- "We will improve people's lives" - no measurable benchmark
-- "Three new schemes were announced" - announcement, not a factual claim
-- "A new ferry route is planned" - future intention, not yet real
-- "Sources say Abela ruled out May election" - unnamed source, cannot verify
+STEP 3 - Classify each statement:
 
-STEP 3 - For each extracted statement, classify it into one of five categories:
+editorial_category options:
+- fact_check: passes the data test above
+- news_event: something that happened, reported as fact, but not verifiable via economic/statistical data
+- proposal: future promise, policy intention, conditional on future event
+- media_report: based on unnamed sources or insider reporting
+- rhetoric: opinion, slogan, attack, value judgement
 
-1. fact_check
-   A verifiable statement about present or past reality, trends, numbers,
-   timelines, law, administration, or historical fact.
-   Also includes bold specific predictions that are measurable and falsifiable.
-   STRONG SIGNALS: euro amounts, percentages, ratios, years, rankings,
-   legal references, published/unpublished, approved/rejected, deadline,
-   highest/lowest, rose/fell/doubled/tripled, from X to Y, since [year]
+STEP 4 - Score fact_checkability (only for fact_check items):
+5 = precise, specific evidence path (exact data source exists)
+4 = strong, evidence path likely exists
+3 = borderline, needs human judgment
 
-2. proposal_announcement
-   A conditional promise, policy intention, planned reform, or future measure
-   that depends on a future event (winning an election, passing a law, etc.).
-   These are NOT fact-checkable yet because they describe what someone would do,
-   not what is or was.
-   SIGNALS: would, plans to, proposes, intends to, within first 100 days,
-   if elected, a PN/PL government will, we are committed to
+ROUTING (applied internally, do not include in output):
+- fact_check score 4-5 -> fact_check queue
+- fact_check score 3 -> review queue
+- everything else -> archive (tagged with their editorial_category)
 
-3. reasoning_review
-   A statement that is not directly true or false but contains:
-   - selective framing or cherry-picked comparison
-   - omission of relevant context
-   - false novelty (presenting existing policy as new)
-   - exaggerated causal claims
-   - misleading implication without direct falsehood
-   These are worth examining but are not straightforward fact-check items.
-
-4. media_source_report
-   A claim based mainly on unnamed sources or insider reporting where the
-   underlying assertion cannot be independently verified at capture stage.
-   SIGNALS: "sources say", "according to insiders", "it is understood that",
-   "party sources told", "reports suggest"
-
-5. rhetoric
-   Pure opinion, slogan, emotional appeal, personal attack, value judgement,
-   or generic campaign language with no testable content.
-   SIGNALS: "best government ever", "failed the people", "we believe",
-   "our vision", "the people deserve", "negative rhetoric"
-
-STEP 4 - Score each claim on fact_checkability (1-5):
-5 = precise, specific, clear evidence path exists (e.g. NSO data, budget document, Constitution)
-4 = strong claim, evidence path exists but may need context
-3 = partially checkable, borderline, needs human judgment
-2 = weak, vague, or missing key specifics
-1 = not checkable (should be rhetoric or proposal)
-
-ROUTING RULES (do not include in output, applied internally):
-- fact_check score 4-5 -> Fact-Check Queue
-- fact_check score 3 -> Review Queue
-- reasoning_review -> Review Queue
-- media_source_report -> Review Queue only if time-sensitive, else exclude
-- proposal_announcement -> EXCLUDE (do not return these)
-- rhetoric -> Rhetoric Archive
-
-IMPORTANT: Be strict. It is better to capture fewer, stronger claims than many weak ones.
-The Fact-Check Queue should contain only items a journalist could actually verify today.
-
-Respond ONLY with valid JSON. No markdown, no backticks.
+Respond ONLY with valid JSON, no markdown, no backticks.
 
 If not political: {"political": false}
 
 If political:
 {"political": true, "claims": [
   {
-    "atomic_claim": "the single cleaned testable claim",
+    "atomic_claim": "the single cleaned claim exactly as stated",
     "speaker": "Full Name or unknown",
     "party": "PL or PN or AD+PD or Independent or unknown",
-    "editorial_category": "fact_check or reasoning_review or media_source_report or rhetoric",
-    "claim_type": "statistical or legal or historical or administrative or comparative or predictive or reasoning or opinion",
+    "editorial_category": "fact_check or news_event or proposal or media_report or rhetoric",
+    "claim_type": "statistical or legal or historical or administrative or comparative or predictive or opinion",
     "fact_checkability_score": 5,
-    "verifiability_status": "checkable or partially_checkable or not_checkable",
-    "evidence_target": "specific source to verify against e.g. NSO statistics, Budget 2026 document, Malta Constitution",
+    "evidence_target": "exact source e.g. NSO GDP statistics 2025, Budget 2026 document, Malta Constitution Article 97",
     "numeric_flag": true,
     "legal_flag": false,
     "comparison_flag": false,
     "timeframe_present": true,
-    "needs_human_review": false,
-    "rejection_reason": null,
-    "status": "approved_for_check or queued_for_review or archived_rhetoric"
+    "rejection_reason": null
   }
 ]}
-
-Note: Do NOT include proposal_announcement items in the output at all.
 """
 
 
@@ -245,7 +192,7 @@ def fetch_feed(feed, cutoff):
     try:
         req = urllib.request.Request(
             feed["url"],
-            headers={"User-Agent": "Mozilla/5.0 (compatible; MaltaClaimCollector/2.0)"}
+            headers={"User-Agent": "Mozilla/5.0 (compatible; MaltaClaimCollector/3.0)"}
         )
         with urllib.request.urlopen(req, timeout=15) as resp:
             raw = resp.read()
@@ -309,7 +256,9 @@ def fetch_feed(feed, cutoff):
 
 
 def process_article(client, article):
-    text = "Headline: {}\n\nSummary: {}".format(article["title"], article["description"])
+    text = "Headline: {}\n\nSummary: {}".format(
+        article["title"], article["description"]
+    )
     try:
         resp = client.messages.create(
             model=MODEL,
@@ -348,7 +297,7 @@ def load_existing():
 
 
 def route(claim):
-    category = claim.get("editorial_category", "rhetoric")
+    category = claim.get("editorial_category", "news_event")
     score = int(claim.get("fact_checkability_score", 1))
 
     if category == "fact_check":
@@ -356,16 +305,10 @@ def route(claim):
             return "fact_check"
         if score == 3:
             return "review"
-        return None  # score 1-2 fact_check claim is too weak, exclude
+        return "archive"
 
-    if category in ("reasoning_review", "media_source_report"):
-        return "review"
-
-    if category == "rhetoric":
-        return "rhetoric"
-
-    # proposal_announcement -> excluded
-    return None
+    # everything else goes to archive, tagged with its category
+    return "archive"
 
 
 def save_claim(claim, article, fetched_at, seen):
@@ -374,9 +317,6 @@ def save_claim(claim, article, fetched_at, seen):
         return None
 
     queue = route(claim)
-    if queue is None:
-        return None  # excluded
-
     path = OUTPUT_FILES[queue]
     exists = os.path.exists(path)
 
@@ -392,17 +332,20 @@ def save_claim(claim, article, fetched_at, seen):
         source = "{} [{}]".format(source, note)
 
     score = int(claim.get("fact_checkability_score", 1))
-    category = claim.get("editorial_category", "rhetoric")
+    category = claim.get("editorial_category", "news_event")
 
     if queue == "fact_check":
         status = "approved_for_check"
         verifiability = "checkable"
+        needs_review = "FALSE"
     elif queue == "review":
         status = "queued_for_review"
         verifiability = "partially_checkable"
+        needs_review = "TRUE"
     else:
-        status = "archived_rhetoric"
+        status = "archived"
         verifiability = "not_checkable"
+        needs_review = "FALSE"
 
     row = {
         "claim_text":             article["title"],
@@ -423,7 +366,7 @@ def save_claim(claim, article, fetched_at, seen):
         "legal_flag":             claim.get("legal_flag", False),
         "comparison_flag":        claim.get("comparison_flag", False),
         "timeframe_present":      claim.get("timeframe_present", False),
-        "needs_human_review":     claim.get("needs_human_review", False),
+        "needs_human_review":     needs_review,
         "rejection_reason":       claim.get("rejection_reason") or "",
         "status":                 status,
         "added_by":               "collector",
@@ -450,7 +393,7 @@ def main():
     cutoff = datetime.now(timezone.utc) - timedelta(hours=LOOKBACK_HRS)
 
     print("=" * 60)
-    print("  Malta Political Claims - Collector v2")
+    print("  Malta Political Claims - Collector v3")
     print("  Run time     : {}".format(fetched_at))
     print("  Looking back : {} hours".format(LOOKBACK_HRS))
     print("  Data folder  : {}".format(DATA_DIR))
@@ -470,7 +413,7 @@ def main():
 
     print("\n[Step 2] Extracting and classifying claims...")
     seen = load_existing()
-    counts = {"fact_check": 0, "review": 0, "rhetoric": 0, "excluded": 0}
+    counts = {"fact_check": 0, "review": 0, "archive": 0}
 
     for i, article in enumerate(all_articles):
         claims = process_article(client, article)
@@ -480,22 +423,21 @@ def main():
             if result:
                 counts[result] += 1
                 if result == "fact_check":
-                    print("  [FC] {} - {}...".format(
-                        article["source_name"], claim.get("atomic_claim","")[:70]))
-            else:
-                counts["excluded"] += 1
+                    print("  [FC] {} | {}".format(
+                        article["source_name"],
+                        claim.get("atomic_claim", "")[:70]
+                    ))
 
         if (i + 1) % 5 == 0 and i + 1 < len(all_articles):
             time.sleep(8)
 
-    total = counts["fact_check"] + counts["review"] + counts["rhetoric"]
+    total = sum(counts.values())
     print("\n" + "=" * 60)
-    print("  Articles processed   : {}".format(len(all_articles)))
-    print("  Fact-Check Queue     : +{}".format(counts["fact_check"]))
-    print("  Review Queue         : +{}".format(counts["review"]))
-    print("  Rhetoric Archive     : +{}".format(counts["rhetoric"]))
-    print("  Excluded (proposals) : {}".format(counts["excluded"]))
-    print("  Total saved          : {}".format(total))
+    print("  Articles processed : {}".format(len(all_articles)))
+    print("  Fact-Check Queue   : +{}".format(counts["fact_check"]))
+    print("  Review Queue       : +{}".format(counts["review"]))
+    print("  Archive            : +{}".format(counts["archive"]))
+    print("  Total saved        : {}".format(total))
     print("=" * 60)
 
 
