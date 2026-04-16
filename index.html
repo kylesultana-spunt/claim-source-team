@@ -268,7 +268,12 @@
           <div class="form-label">Date</div>
           <input id="mc-date" class="form-input" type="date">
         </div>
-        <button class="form-submit" onclick="submitManualClaim()">Add to Review Queue →</button>
+        <div class="form-field">
+          <div class="form-label">GitHub Token *</div>
+          <input id="mc-token" class="form-input" type="password" placeholder="ghp_xxxxxxxxxxxx" onchange="saveToken()" onblur="saveToken()">
+          <div style="font-size:10px;color:var(--muted2);margin-top:2px;">Saved in your browser — enter once, never again. Generate at github.com/settings/tokens (repo scope)</div>
+        </div>
+        <button class="form-submit" onclick="submitManualClaim()">Add to Fact-Check Queue →</button>
         <div id="mc-feedback" class="form-feedback"></div>
       </div>
     </div>
@@ -397,45 +402,104 @@ async function loadData() {
   }
 }
 
-// ── Manual claim (saves as GitHub Issue via URL) ───────────────────────────
-function submitManualClaim() {
-  const claim  = document.getElementById('mc-claim').value.trim();
-  const speaker= document.getElementById('mc-speaker').value.trim();
-  const party  = document.getElementById('mc-party').value.trim();
-  const srcName= document.getElementById('mc-source-name').value.trim();
-  const srcUrl = document.getElementById('mc-source-url').value.trim();
-  const date   = document.getElementById('mc-date').value.trim();
-  const fb     = document.getElementById('mc-feedback');
+// ── Manual claim (commits directly to fact_check_queue.csv via GitHub API) ──
+async function submitManualClaim() {
+  const claim   = document.getElementById('mc-claim').value.trim();
+  const speaker = document.getElementById('mc-speaker').value.trim();
+  const party   = document.getElementById('mc-party').value.trim();
+  const srcName = document.getElementById('mc-source-name').value.trim();
+  const srcUrl  = document.getElementById('mc-source-url').value.trim();
+  const date    = document.getElementById('mc-date').value.trim();
+  const token   = document.getElementById('mc-token') ? document.getElementById('mc-token').value.trim() : '';
+  const fb      = document.getElementById('mc-feedback');
+  const btn     = document.querySelector('.form-submit');
 
-  if (!claim)  { fb.className='form-feedback error'; fb.textContent='Claim text required.'; return; }
-  if (!speaker){ fb.className='form-feedback error'; fb.textContent='Speaker required.'; return; }
+  if (!claim)   { fb.className='form-feedback error'; fb.textContent='Claim text required.'; return; }
+  if (!speaker) { fb.className='form-feedback error'; fb.textContent='Speaker required.'; return; }
+  if (!token)   { fb.className='form-feedback error'; fb.textContent='GitHub token required.'; return; }
 
-  // Add to local view immediately
-  allClaims.push({
-    claim_text: claim, atomic_claim: claim,
-    speaker, role: '', party, source_name: srcName,
-    source_url: srcUrl, publication_date: date || new Date().toISOString().slice(0,10),
-    fetched_at: new Date().toLocaleString(), claim_type: 'manual',
-    verifiability_status: 'partially_checkable', fact_checkability_score: '3',
-    evidence_target: '', numeric_flag: 'FALSE', legal_flag: 'FALSE',
-    comparison_flag: 'FALSE', timeframe_present: 'FALSE',
-    needs_human_review: 'TRUE', rejection_reason: '', status: 'queued_for_review',
-    added_by: 'manual_entry', _queue: 'review',
-  });
-  updateAll();
+  btn.disabled = true;
+  fb.className = 'form-feedback';
+  fb.textContent = 'Saving...';
 
-  // Open GitHub issue to record it permanently
-  const body = encodeURIComponent(
-    `**Claim:** ${claim}\n**Speaker:** ${speaker}\n**Party:** ${party}\n` +
-    `**Source:** ${srcName}\n**URL:** ${srcUrl}\n**Date:** ${date}`
-  );
-  const title = encodeURIComponent(`Manual claim: ${speaker} — ${claim.slice(0,60)}`);
-  window.open(`https://github.com/${GITHUB_USER}/${GITHUB_REPO}/issues/new?title=${title}&body=${body}&labels=manual-claim`, '_blank');
+  try {
+    const today = date || new Date().toISOString().slice(0,10);
+    const fetchedAt = new Date().toISOString().slice(0,16).replace('T',' ') + ' UTC';
 
-  fb.className = 'form-feedback success';
-  fb.textContent = '✓ Added to view · GitHub issue opened to save it';
-  document.getElementById('mc-claim').value = '';
-  document.getElementById('mc-speaker').value = '';
+    // Build new CSV row
+    const newRow = [
+      claim, claim, speaker, '', party,
+      srcName, srcUrl, today, fetchedAt,
+      'manual', 'checkable', '5',
+      '', 'FALSE', 'FALSE', 'FALSE', 'FALSE', 'FALSE', '',
+      'approved_for_check', 'manual_entry'
+    ].map(v => `"${String(v).replace(/"/g,'""')}"`).join(',');
+
+    // Get current file from GitHub API
+    const fileUrl = `https://api.github.com/repos/${GITHUB_USER}/${GITHUB_REPO}/contents/data/fact_check_queue.csv`;
+    const getRes = await fetch(fileUrl, {
+      headers: { 'Authorization': `token ${token}`, 'Accept': 'application/vnd.github.v3+json' }
+    });
+    if (!getRes.ok) throw new Error('Could not read CSV: ' + getRes.status);
+    const fileData = await getRes.json();
+
+    // Decode, append row, re-encode
+    const currentContent = atob(fileData.content.replace(/
+/g,''));
+    const newContent = currentContent.trimEnd() + '
+' + newRow + '
+';
+    const encoded = btoa(unescape(encodeURIComponent(newContent)));
+
+    // Commit back
+    const putRes = await fetch(fileUrl, {
+      method: 'PUT',
+      headers: {
+        'Authorization': `token ${token}`,
+        'Accept': 'application/vnd.github.v3+json',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        message: `Manual claim: ${speaker} — ${claim.slice(0,50)}`,
+        content: encoded,
+        sha: fileData.sha
+      })
+    });
+
+    if (!putRes.ok) {
+      const err = await putRes.json();
+      throw new Error(err.message || 'Commit failed');
+    }
+
+    // Add to local view immediately
+    allClaims.push({
+      claim_text: claim, atomic_claim: claim,
+      speaker, role: '', party, source_name: srcName,
+      source_url: srcUrl, publication_date: today,
+      fetched_at: fetchedAt, claim_type: 'manual',
+      verifiability_status: 'checkable', fact_checkability_score: '5',
+      evidence_target: '', numeric_flag: 'FALSE', legal_flag: 'FALSE',
+      comparison_flag: 'FALSE', timeframe_present: 'FALSE',
+      needs_human_review: 'FALSE', rejection_reason: '',
+      status: 'approved_for_check', added_by: 'manual_entry', _queue: 'fact_check',
+    });
+    updateAll();
+
+    fb.className = 'form-feedback success';
+    fb.textContent = '✓ Saved to Fact-Check Queue';
+    document.getElementById('mc-claim').value = '';
+    document.getElementById('mc-speaker').value = '';
+    document.getElementById('mc-source-name').value = '';
+    document.getElementById('mc-source-url').value = '';
+    document.getElementById('mc-date').value = '';
+    document.getElementById('mc-party').value = '';
+
+  } catch(e) {
+    fb.className = 'form-feedback error';
+    fb.textContent = 'Error: ' + e.message;
+  }
+
+  btn.disabled = false;
 }
 
 // ── Filters ────────────────────────────────────────────────────────────────
@@ -595,8 +659,22 @@ function esc(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
+// ── Token persistence ─────────────────────────────────────────────────────
+function saveToken() {
+  const t = document.getElementById('mc-token').value.trim();
+  if (t) localStorage.setItem('cst_github_token', t);
+}
+
+function loadToken() {
+  const t = localStorage.getItem('cst_github_token');
+  if (t) {
+    const el = document.getElementById('mc-token');
+    if (el) el.value = t;
+  }
+}
+
 // ── Init ───────────────────────────────────────────────────────────────────
-document.addEventListener('DOMContentLoaded', loadData);
+document.addEventListener('DOMContentLoaded', () => { loadData(); loadToken(); });
 </script>
 </body>
 </html>
