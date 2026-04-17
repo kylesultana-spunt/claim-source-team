@@ -163,6 +163,101 @@ You must respond ONLY with valid JSON — no other text:
   "debate_summary": "2-3 sentence summary of the key points from the debate"
 }}"""
 
+# ── Deduplication ─────────────────────────────────────────────────────────
+
+TOPIC_SIGNALS = {
+    'DEBT':        ['debt', 'deficit', 'borrow', 'interest payment', 'billion', 'fiscal'],
+    'HOUSING':     ['rent', 'housing', 'property', 'dwelling', 'affordable'],
+    'TRAFFIC':     ['traffic', 'vehicle', 'congestion', 'transport', 'commute'],
+    'CORRUPTION':  ['corruption', 'perceptions index', 'transparency international', 'cpi'],
+    'EMPLOYMENT':  ['employment', 'unemployment', 'worker', 'job', 'labour market'],
+    'ENVIRONMENT': ['environment', 'planning', 'construction', 'building permit', 'UNESCO'],
+    'POLLS':       ['survey', 'poll', 'voting intention', 'trust rating', 'percentage points'],
+    'GOVERNANCE':  ['constitution', 'auditor general', 'chief justice', 'legal notice', 'manifesto'],
+    'ENERGY':      ['energy', 'electricity', 'fuel', 'gas price', 'subsidy'],
+    'HEALTH':      ['hospital', 'mater dei', 'health', 'waiting'],
+}
+
+def get_topic(claim_text):
+    text = claim_text.lower()
+    topics = []
+    for topic, signals in TOPIC_SIGNALS.items():
+        if any(s in text for s in signals):
+            topics.append(topic)
+    return '|'.join(sorted(topics)) if topics else 'OTHER'
+
+def is_duplicate(new_claim, new_speaker, past_claims):
+    """
+    Returns (is_dup, reason) where is_dup is True if a similar claim
+    from the same speaker already exists in past_claims.
+    """
+    new_topic = get_topic(new_claim)
+    new_spk   = (new_speaker or '').strip().lower()
+
+    for past in past_claims:
+        past_spk   = (past.get('speaker') or '').strip().lower()
+        past_claim = past.get('atomic_claim', '')
+        past_topic = get_topic(past_claim)
+
+        # Must be same speaker
+        if new_spk != past_spk:
+            continue
+
+        # Must be same topic
+        if not new_topic or not past_topic:
+            continue
+        # Check topic overlap
+        new_set  = set(new_topic.split('|'))
+        past_set = set(past_topic.split('|'))
+        if not new_set & past_set:
+            continue
+
+        # Same speaker, same topic — it's a duplicate
+        return True, "Similar claim from {} on topic {} already exists: {}...".format(
+            past_spk, '|'.join(new_set & past_set), past_claim[:60]
+        )
+
+    return False, None
+
+# ── Deduplication ─────────────────────────────────────────────────────────
+
+TOPIC_SIGNALS = {
+    'DEBT':        ['debt', 'deficit', 'borrow', 'interest payment', 'fiscal'],
+    'HOUSING':     ['rent', 'housing', 'property', 'dwelling', 'affordable'],
+    'TRAFFIC':     ['traffic', 'vehicle', 'congestion', 'transport'],
+    'CORRUPTION':  ['corruption', 'perceptions index', 'transparency international'],
+    'EMPLOYMENT':  ['employment', 'unemployment', 'worker', 'job vacancy'],
+    'ENVIRONMENT': ['environment', 'planning', 'construction', 'building permit', 'UNESCO'],
+    'POLLS':       ['survey', 'poll', 'voting intention', 'trust rating'],
+    'GOVERNANCE':  ['constitution', 'auditor general', 'chief justice', 'legal notice'],
+    'ENERGY':      ['energy', 'electricity', 'fuel', 'subsidy'],
+    'HEALTH':      ['hospital', 'mater dei', 'waiting'],
+}
+
+def get_topic(claim_text):
+    text = claim_text.lower()
+    topics = []
+    for topic, signals in TOPIC_SIGNALS.items():
+        if any(s in text for s in signals):
+            topics.append(topic)
+    return set(topics)
+
+def is_duplicate(new_claim, new_speaker, past_claims):
+    """Returns (is_dup, reason). True if same speaker + topic already in past_claims."""
+    new_topics = get_topic(new_claim)
+    new_spk = (new_speaker or '').strip().lower()
+    for past in past_claims:
+        past_spk = (past.get('speaker') or '').strip().lower()
+        if new_spk != past_spk:
+            continue
+        past_topics = get_topic(past.get('atomic_claim', ''))
+        overlap = new_topics & past_topics
+        if overlap:
+            return True, "Similar {} claim from {} already exists: {}...".format(
+                '|'.join(overlap), past_spk, past.get('atomic_claim', '')[:60]
+            )
+    return False, None
+
 # ── Past claims context ───────────────────────────────────────────────────
 
 def load_past_claims(limit=200):
