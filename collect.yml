@@ -1,0 +1,57 @@
+name: Claim Collector and Analyser
+
+on:
+  schedule:
+    - cron: '0 5 * * *'   # 7am Malta (UTC+2)
+    - cron: '0 15 * * *'  # 5pm Malta — collector only afternoon run
+  workflow_dispatch:
+    inputs:
+      run_mode:
+        description: 'Which step to run'
+        required: false
+        default: 'both'
+        type: choice
+        options:
+          - both
+          - collector_only
+          - analyser_only
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install anthropic
+
+      - name: Run Claim Collector
+        if: ${{ github.event.inputs.run_mode != 'analyser_only' }}
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAIMS_DATA_DIR: ${{ github.workspace }}/data
+        run: python collector.py
+
+      - name: Run Claim Analyser
+        if: ${{ github.event.inputs.run_mode != 'collector_only' }}
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAIMS_DATA_DIR: ${{ github.workspace }}/data
+        run: python analyser.py
+
+      - name: Commit updated CSVs
+        run: |
+          git config --global user.name "Claim Collector Bot"
+          git config --global user.email "bot@claim-source-team"
+          git add data/
+          git diff --staged --quiet || git commit -m "Auto: update claims $(date -u '+%Y-%m-%d %H:%M UTC')"
+          git push

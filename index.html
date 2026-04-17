@@ -136,6 +136,7 @@
   .queue-badge.fact-check{background:var(--amber-bg);color:var(--amber);border:1px solid var(--amber-dim);}
   .queue-badge.review{background:var(--blue-bg);color:var(--blue);border:1px solid var(--blue-dim);}
   .queue-badge.rhetoric{background:var(--slate-bg);color:var(--slate);border:1px solid var(--slate-dim);}
+  .queue-badge.archive{background:#1a1a1a;color:var(--muted);border:1px solid var(--muted2);}
   .type-tag{font-family:var(--font-mono);font-size:10px;color:var(--muted);}
   .td-date{font-family:var(--font-mono);font-size:11px;color:var(--muted);white-space:nowrap;}
   .flag-row{display:flex;gap:3px;margin-top:3px;flex-wrap:wrap;}
@@ -225,6 +226,17 @@
 
 <div class="layout">
   <nav class="sidebar">
+    <div class="sidebar-section" style="border-bottom:1px solid var(--border);padding-bottom:14px;">
+      <div class="sidebar-label">GitHub Token</div>
+      <div style="display:flex;gap:6px;align-items:center;">
+        <input id="mc-token" class="form-input" type="password" placeholder="ghp_xxxxxxxxxxxx"
+          style="flex:1;font-size:11px;padding:5px 8px;"
+          onchange="saveToken()" onblur="saveToken()" oninput="saveToken()">
+        <div id="token-indicator" style="font-size:10px;color:var(--muted2);white-space:nowrap;">not set</div>
+      </div>
+      <div style="font-size:10px;color:var(--muted2);margin-top:4px;">Saved in browser · needed for approve / remove</div>
+    </div>
+
     <div class="sidebar-section">
       <div class="sidebar-label">Queues</div>
       <div class="queue-item active" onclick="setQueue('all',this)">
@@ -242,6 +254,10 @@
       <div class="queue-item" onclick="setQueue('rhetoric',this)">
         <div class="queue-item-left"><div class="queue-dot slate"></div><div class="queue-name">Rhetoric Archive</div></div>
         <div class="queue-count" id="count-rh">0</div>
+      </div>
+      <div class="queue-item" onclick="setQueue('archive',this)">
+        <div class="queue-item-left"><div class="queue-dot" style="background:var(--muted2)"></div><div class="queue-name">Archive</div></div>
+        <div class="queue-count" id="count-ar">0</div>
       </div>
     </div>
 
@@ -303,12 +319,7 @@
           <div class="form-label">Date</div>
           <input id="mc-date" class="form-input" type="date">
         </div>
-        <div class="form-field">
-          <div class="form-label">GitHub Token *</div>
-          <input id="mc-token" class="form-input" type="password" placeholder="ghp_xxxxxxxxxxxx" onchange="saveToken()" onblur="saveToken()">
-          <div style="font-size:10px;color:var(--muted2);margin-top:2px;">Saved in your browser — enter once, never again. Generate at github.com/settings/tokens (repo scope)</div>
-        </div>
-        <button class="form-submit" onclick="submitManualClaim()">Add to Review Queue →</button>
+<button class="form-submit" onclick="submitManualClaim()">Add to Review Queue →</button>
         <div id="mc-feedback" class="form-feedback"></div>
       </div>
     </div>
@@ -574,7 +585,9 @@ function sortBy(col) {
 function getFiltered() {
   const search = (document.getElementById('search-input').value||'').toLowerCase();
   return allClaims.filter(c => {
-    if (activeQueue !== 'all' && c._queue !== activeQueue) return false;
+    // Archive only shown when explicitly selected
+    if (c._queue === 'archive' && activeQueue !== 'archive') return false;
+    if (activeQueue !== 'all' && activeQueue !== 'archive' && c._queue !== activeQueue) return false;
     if (activeParty !== 'all') {
       if (activeParty === 'other') { if (c.party==='PL'||c.party==='PN') return false; }
       else if (c.party !== activeParty) return false;
@@ -606,8 +619,8 @@ function renderTable() {
   tbody.innerHTML = rows.map((c,i) => {
     const score = +c.fact_checkability_score||0;
     const pb = c.party==='PL'?'badge-pl':c.party==='PN'?'badge-pn':'badge-other';
-    const qc = c._queue==='fact_check'?'fact-check':c._queue==='review'?'review':'rhetoric';
-    const ql = c._queue==='fact_check'?'Fact-Check':c._queue==='review'?'Review':'Rhetoric';
+    const qc = c._queue==='fact_check'?'fact-check':c._queue==='review'?'review':c._queue==='archive'?'archive':'rhetoric';
+    const ql = c._queue==='fact_check'?'Fact-Check':c._queue==='review'?'Review':c._queue==='archive'?'Archive':'Rhetoric';
     const flags = [{k:'numeric_flag',l:'NUM'},{k:'legal_flag',l:'LEG'},{k:'comparison_flag',l:'CMP'},{k:'timeframe_present',l:'TIME'}]
       .map(f=>'<span class="flag '+(String(c[f.k]).toLowerCase()==='true'?'on':'')+'">'+ f.l+'</span>').join('');
     return '<tr class="claim-row'+(selectedIdx===i?' selected':'')+'" onclick="selectRow('+i+',this)">'
@@ -631,8 +644,8 @@ function showDetail(c) {
   panel.classList.remove('empty');
   const score = +c.fact_checkability_score||0;
   const sc = score>=4?'var(--amber)':score===3?'var(--blue)':'var(--muted)';
-  const qc = c._queue==='fact_check'?'fact-check':c._queue==='review'?'review':'rhetoric';
-  const ql = c._queue==='fact_check'?'Fact-Check Queue':c._queue==='review'?'Review Queue':'Rhetoric Archive';
+  const qc = c._queue==='fact_check'?'fact-check':c._queue==='review'?'review':c._queue==='archive'?'archive':'rhetoric';
+  const ql = c._queue==='fact_check'?'Fact-Check Queue':c._queue==='review'?'Review Queue':c._queue==='archive'?'Archive':'Rhetoric Archive';
   const fh = [{k:'numeric_flag',l:'Numeric'},{k:'legal_flag',l:'Legal'},{k:'comparison_flag',l:'Comparison'},{k:'timeframe_present',l:'Timeframe'}]
     .map(f=>'<span class="flag-detail '+(String(c[f.k]).toLowerCase()==='true'?'on':'')+'">'+ f.l+'</span>').join('');
 
@@ -661,6 +674,8 @@ function showDetail(c) {
     +(c.source_url?'<div class="detail-val"><a href="'+esc(c.source_url)+'" target="_blank">'+esc(c.source_url)+'</a></div>':'')
     +'<div class="detail-val" style="color:var(--muted);font-size:12px">'+esc(c.publication_date)+'</div></div>'
     +(c.claim_text&&c.claim_text!==c.atomic_claim?'<div><div class="detail-section-label">Original headline</div><div class="original-text">'+esc(c.claim_text)+'</div></div>':'')
+    +(c.counter_claim?'<div><div class="detail-section-label" style="color:var(--red)">⚡ Counter-claim</div><div class="evidence-box" style="border-color:var(--red-dim);color:var(--text)">'+esc(c.counter_claim)+'</div></div>':'')
+    +(c.passed_filter&&c.passed_filter!=='none'?'<div><div class="detail-section-label">Passed filter</div><div style="display:flex;gap:6px;flex-wrap:wrap">'+c.passed_filter.split("|").map(f=>'<span class="type-tag" style="background:var(--green-bg);color:var(--green);border-color:var(--green-dim)">'+f+'</span>').join('')+'</div></div>':'')
     +'</div>';
 
   // Action bar — shown only for fact_check and review queues
@@ -884,15 +899,18 @@ function updateAll() {
   const fc=allClaims.filter(c=>c._queue==='fact_check').length;
   const rv=allClaims.filter(c=>c._queue==='review').length;
   const rh=allClaims.filter(c=>c._queue==='rhetoric').length;
-  const total=allClaims.length;
+  const ar=allClaims.filter(c=>c._queue==='archive').length;
+  const total=fc+rv+rh;
   document.getElementById('stat-fc').textContent=fc;
   document.getElementById('stat-rv').textContent=rv;
   document.getElementById('stat-rh').textContent=rh;
+  const arEl=document.getElementById('stat-ar'); if(arEl) arEl.textContent=ar;
   document.getElementById('stat-total').textContent=total;
   document.getElementById('count-all').textContent=total;
   document.getElementById('count-fc').textContent=fc;
   document.getElementById('count-rv').textContent=rv;
   document.getElementById('count-rh').textContent=rh;
+  const arCt=document.getElementById('count-ar'); if(arCt) arCt.textContent=ar;
   const types=[...new Set(allClaims.map(c=>c.claim_type).filter(Boolean))].sort();
   const tf=document.getElementById('type-filters');
   tf.innerHTML='<div class="type-filter-item active" onclick="setType(\'all\',this)"><div class="filter-dot"></div>All types</div>'
@@ -908,14 +926,22 @@ function esc(s) {
 // ── Token persistence ─────────────────────────────────────────────────────
 function saveToken() {
   const t = document.getElementById('mc-token').value.trim();
-  if (t) localStorage.setItem('cst_github_token', t);
+  if (t) {
+    localStorage.setItem('cst_github_token', t);
+    const ind = document.getElementById('token-indicator');
+    if (ind) { ind.textContent = '✓ saved'; ind.style.color = 'var(--green)'; }
+  }
 }
 
 function loadToken() {
   const t = localStorage.getItem('cst_github_token');
-  if (t) {
-    const el = document.getElementById('mc-token');
-    if (el) el.value = t;
+  const el  = document.getElementById('mc-token');
+  const ind = document.getElementById('token-indicator');
+  if (t && el) {
+    el.value = t;
+    if (ind) { ind.textContent = '✓ saved'; ind.style.color = 'var(--green)'; }
+  } else {
+    if (ind) { ind.textContent = 'not set'; ind.style.color = 'var(--red)'; }
   }
 }
 
