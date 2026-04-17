@@ -3,7 +3,7 @@ name: Claim Collector and Analyser
 on:
   schedule:
     - cron: '0 5 * * *'   # 7am Malta (UTC+2)
-    - cron: '0 15 * * *'  # 5pm Malta — collector only afternoon run
+    - cron: '0 15 * * *'  # 5pm Malta
   workflow_dispatch:
     inputs:
       run_mode:
@@ -15,6 +15,9 @@ on:
           - both
           - collector_only
           - analyser_only
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   collect:
