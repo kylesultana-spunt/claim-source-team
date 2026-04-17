@@ -168,9 +168,44 @@
   .empty-state-title{font-family:var(--font-head);font-size:15px;font-weight:700;color:var(--muted);}
   .empty-state-sub{font-size:12px;color:var(--muted2);max-width:280px;line-height:1.6;}
 
+  /* Action buttons in detail panel */
+  .action-bar{display:flex;gap:8px;padding:14px 20px;border-top:1px solid var(--border);flex-shrink:0;background:var(--bg2);}
+  .btn-action{flex:1;font-family:var(--font-head);font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;padding:9px 12px;border-radius:4px;border:none;cursor:pointer;transition:opacity .15s;}
+  .btn-action:hover{opacity:.85;}
+  .btn-action:disabled{opacity:.35;cursor:not-allowed;}
+  .btn-approve{background:var(--green);color:#000;}
+  .btn-remove{background:var(--red-bg);color:var(--red);border:1px solid var(--red-dim);}
+  .action-status{font-family:var(--font-mono);font-size:11px;text-align:center;padding:4px 20px 10px;min-height:20px;}
+  .action-status.ok{color:var(--green);}
+  .action-status.err{color:var(--red);}
+
   ::-webkit-scrollbar{width:4px;height:4px;}
   ::-webkit-scrollbar-track{background:transparent;}
   ::-webkit-scrollbar-thumb{background:var(--border2);border-radius:2px;}
+
+  /* Action bar */
+  .action-bar{display:flex;gap:8px;padding:16px 20px 8px;border-top:1px solid var(--border);}
+  .btn-action{font-family:var(--font-head);font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;border:none;padding:9px 14px;border-radius:4px;cursor:pointer;transition:opacity .15s;flex:1;}
+  .btn-action:hover{opacity:.85;}
+  .btn-action:disabled{opacity:.4;cursor:not-allowed;}
+  .btn-approve{background:var(--green);color:#000;}
+  .btn-remove{background:var(--red-bg);color:var(--red);border:1px solid var(--red-dim);}
+  .action-status{font-family:var(--font-mono);font-size:11px;text-align:center;padding:4px 20px 12px;min-height:22px;}
+  .action-status.success{color:var(--green);}
+  .action-status.error{color:var(--red);}
+  .action-status.loading{color:var(--muted);}
+
+  /* Action bar */
+  .action-bar{display:flex;gap:8px;padding:16px 20px 8px;border-top:1px solid var(--border);}
+  .btn-action{font-family:var(--font-head);font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;border:none;padding:9px 14px;border-radius:4px;cursor:pointer;transition:opacity .15s;flex:1;}
+  .btn-action:hover{opacity:.85;}
+  .btn-action:disabled{opacity:.4;cursor:not-allowed;}
+  .btn-approve{background:var(--green);color:#000;}
+  .btn-remove{background:var(--red-bg);color:var(--red);border:1px solid var(--red-dim);}
+  .action-status{font-family:var(--font-mono);font-size:11px;text-align:center;padding:4px 20px 12px;min-height:22px;}
+  .action-status.success{color:var(--green);}
+  .action-status.error{color:var(--red);}
+  .action-status.loading{color:var(--muted);}
 </style>
 </head>
 <body>
@@ -331,6 +366,7 @@ const CSV_URLS = {
   fact_check: '/data/fact_check_queue.csv',
   review:     '/data/review_queue.csv',
   rhetoric:   '/data/rhetoric_archive.csv',
+  archive:    '/data/archive.csv',
 };
 
 // ── State ──────────────────────────────────────────────────────────────────
@@ -586,10 +622,7 @@ function renderTable() {
   window._filteredRows = rows;
 }
 
-function selectRow(i, el) {
-  document.querySelectorAll('.claim-row').forEach(r => r.classList.remove('selected'));
-  el.classList.add('selected'); selectedIdx = i; showDetail(window._filteredRows[i]);
-}
+
 
 // ── Detail panel ───────────────────────────────────────────────────────────
 function showDetail(c) {
@@ -629,6 +662,221 @@ function showDetail(c) {
     +'<div class="detail-val" style="color:var(--muted);font-size:12px">'+esc(c.publication_date)+'</div></div>'
     +(c.claim_text&&c.claim_text!==c.atomic_claim?'<div><div class="detail-section-label">Original headline</div><div class="original-text">'+esc(c.claim_text)+'</div></div>':'')
     +'</div>';
+
+  // Action bar — shown only for fact_check and review queues
+  if (c._queue === 'fact_check') {
+    panel.innerHTML +=
+      '<div class="action-bar">'
+      +'<button class="btn-action btn-remove" onclick="removeFromFactCheck()">✕ Remove from Fact-Check</button>'
+      +'</div>'
+      +'<div class="action-status" id="action-status"></div>';
+  } else if (c._queue === 'review') {
+    panel.innerHTML +=
+      '<div class="action-bar">'
+      +'<button class="btn-action btn-approve" onclick="approveToFactCheck()">✓ Approve to Fact-Check</button>'
+      +'<button class="btn-action btn-remove" onclick="removeFromReview()">✕ Remove</button>'
+      +'</div>'
+      +'<div class="action-status" id="action-status"></div>';
+  }
+}
+
+
+// ── GitHub CSV editing engine ──────────────────────────────────────────────
+
+let _currentClaim = null; // track which claim is selected
+
+function selectRow(i, el) {
+  document.querySelectorAll('.claim-row').forEach(r => r.classList.remove('selected'));
+  el.classList.add('selected');
+  selectedIdx = i;
+  _currentClaim = window._filteredRows[i];
+  showDetail(_currentClaim);
+}
+
+async function githubEditCSV(fromFile, toFile, claim, transform) {
+  const token = localStorage.getItem('cst_github_token');
+  if (!token) {
+    return { ok: false, error: 'No GitHub token saved. Add a claim manually first to save your token.' };
+  }
+
+  const base = 'https://api.github.com/repos/' + GITHUB_USER + '/' + GITHUB_REPO + '/contents/data/';
+
+  // Read source file
+  const srcRes = await fetch(base + fromFile, {
+    headers: { 'Authorization': 'token ' + token, 'Accept': 'application/vnd.github.v3+json' }
+  });
+  if (!srcRes.ok) return { ok: false, error: 'Could not read ' + fromFile + ' (' + srcRes.status + ')' };
+  const srcData = await srcRes.json();
+  const srcText = decodeURIComponent(escape(atob(srcData.content.split('\n').join(''))));
+
+  // Parse CSV
+  const srcLines = srcText.trim().split('\n');
+  const header   = srcLines[0];
+
+  // Find the row matching this claim by atomic_claim
+  const claimLower = claim.atomic_claim.toLowerCase().trim();
+  const matchIdx   = srcLines.findIndex((line, i) => {
+    if (i === 0) return false;
+    return line.toLowerCase().includes(claimLower.slice(0, 60));
+  });
+
+  if (matchIdx === -1) {
+    return { ok: false, error: 'Could not find this claim in ' + fromFile + '. It may have already been moved.' };
+  }
+
+  const matchedRow = srcLines[matchIdx];
+
+  // Remove from source
+  const newSrcLines = srcLines.filter((_, i) => i !== matchIdx);
+  const newSrcText  = newSrcLines.join('\n') + '\n';
+
+  // Commit source file
+  const srcEncoded = btoa(unescape(encodeURIComponent(newSrcText)));
+  const srcPut = await fetch(base + fromFile, {
+    method: 'PUT',
+    headers: { 'Authorization': 'token ' + token, 'Accept': 'application/vnd.github.v3+json', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message: 'Editor: move claim from ' + fromFile, content: srcEncoded, sha: srcData.sha })
+  });
+  if (!srcPut.ok) {
+    const e = await srcPut.json();
+    return { ok: false, error: 'Could not update ' + fromFile + ': ' + (e.message || srcPut.status) };
+  }
+
+  // If toFile is provided, append to destination
+  if (toFile) {
+    const dstRes = await fetch(base + toFile, {
+      headers: { 'Authorization': 'token ' + token, 'Accept': 'application/vnd.github.v3+json' }
+    });
+    if (!dstRes.ok) return { ok: false, error: 'Could not read ' + toFile };
+    const dstData = await dstRes.json();
+    const dstText = decodeURIComponent(escape(atob(dstData.content.split('\n').join(''))));
+
+    // Apply transform to the row (e.g. update score or status)
+    const newRow = transform ? transform(matchedRow) : matchedRow;
+    const newDstText = dstText.trimEnd() + '\n' + newRow + '\n';
+    const dstEncoded = btoa(unescape(encodeURIComponent(newDstText)));
+
+    const dstPut = await fetch(base + toFile, {
+      method: 'PUT',
+      headers: { 'Authorization': 'token ' + token, 'Accept': 'application/vnd.github.v3+json', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: 'Editor: move claim to ' + toFile, content: dstEncoded, sha: dstData.sha })
+    });
+    if (!dstPut.ok) {
+      const e = await dstPut.json();
+      return { ok: false, error: 'Could not update ' + toFile + ': ' + (e.message || dstPut.status) };
+    }
+  }
+
+  return { ok: true };
+}
+
+function setActionStatus(msg, type) {
+  const el = document.getElementById('action-status');
+  if (el) { el.textContent = msg; el.className = 'action-status ' + (type || ''); }
+}
+
+function disableActionButtons(disabled) {
+  document.querySelectorAll('.btn-action').forEach(b => b.disabled = disabled);
+}
+
+// ── Remove from Fact-Check Queue -> Archive ────────────────────────────────
+async function removeFromFactCheck() {
+  if (!_currentClaim) return;
+  if (!confirm('Move this claim to Archive? It will not be deleted.')) return;
+  disableActionButtons(true);
+  setActionStatus('Moving to archive...', 'loading');
+  try {
+    const result = await githubEditCSV(
+      'fact_check_queue.csv',
+      'archive.csv',
+      _currentClaim,
+      row => row.replace(/,approved_for_check,collector/, ',removed_by_editor,collector')
+              .replace(/,approved_for_check,manual_entry/, ',removed_by_editor,manual_entry')
+    );
+    if (result.ok) {
+      setActionStatus('✓ Moved to Archive. Refreshing in 60s...', 'success');
+      allClaims = allClaims.filter(c => c.atomic_claim !== _currentClaim.atomic_claim);
+      _currentClaim = null;
+      updateAll();
+      showDetail(null);
+    } else {
+      setActionStatus('Error: ' + result.error, 'error');
+      disableActionButtons(false);
+    }
+  } catch(e) {
+    setActionStatus('Error: ' + e.message, 'error');
+    disableActionButtons(false);
+  }
+}
+
+// ── Approve from Review Queue -> Fact-Check Queue (score 5) ───────────────
+async function approveToFactCheck() {
+  if (!_currentClaim) return;
+  disableActionButtons(true);
+  setActionStatus('Approving to Fact-Check Queue...', 'loading');
+  try {
+    const result = await githubEditCSV(
+      'review_queue.csv',
+      'fact_check_queue.csv',
+      _currentClaim,
+      row => {
+        // Set score to 5, status to approved_for_check, verifiability to checkable
+        let r = row;
+        // Replace fact_checkability_score value (it's a CSV column, find and replace carefully)
+        r = r.replace(/,3,/g, ',5,').replace(/,4,/g, ',5,');
+        r = r.replace(/queued_for_review/g, 'approved_for_check');
+        r = r.replace(/partially_checkable/g, 'checkable');
+        return r;
+      }
+    );
+    if (result.ok) {
+      setActionStatus('✓ Approved at score 5. Refreshing shortly...', 'success');
+      // Update local state
+      _currentClaim.fact_checkability_score = '5';
+      _currentClaim._queue = 'fact_check';
+      _currentClaim.status = 'approved_for_check';
+      allClaims = allClaims.filter(c => c.atomic_claim !== _currentClaim.atomic_claim);
+      allClaims.push(_currentClaim);
+      _currentClaim = null;
+      updateAll();
+      showDetail(null);
+    } else {
+      setActionStatus('Error: ' + result.error, 'error');
+      disableActionButtons(false);
+    }
+  } catch(e) {
+    setActionStatus('Error: ' + e.message, 'error');
+    disableActionButtons(false);
+  }
+}
+
+// ── Remove from Review Queue -> Archive ───────────────────────────────────
+async function removeFromReview() {
+  if (!_currentClaim) return;
+  if (!confirm('Move this claim to Archive?')) return;
+  disableActionButtons(true);
+  setActionStatus('Moving to archive...', 'loading');
+  try {
+    const result = await githubEditCSV(
+      'review_queue.csv',
+      'archive.csv',
+      _currentClaim,
+      row => row.replace(/queued_for_review/g, 'removed_by_editor')
+    );
+    if (result.ok) {
+      setActionStatus('✓ Moved to Archive.', 'success');
+      allClaims = allClaims.filter(c => c.atomic_claim !== _currentClaim.atomic_claim);
+      _currentClaim = null;
+      updateAll();
+      showDetail(null);
+    } else {
+      setActionStatus('Error: ' + result.error, 'error');
+      disableActionButtons(false);
+    }
+  } catch(e) {
+    setActionStatus('Error: ' + e.message, 'error');
+    disableActionButtons(false);
+  }
 }
 
 // ── Update all stats ───────────────────────────────────────────────────────
