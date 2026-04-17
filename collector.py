@@ -385,10 +385,24 @@ NAMED SPEAKERS to look for include:
   Silvio Schembri, Owen Bonnici, Roderick Galdes, Clifton Grima
 - Opposition: Alex Borg, Adrian Delia, Stephen Spiteri, Darren Carabott,
   Bernard Grech, Eve Borg Bonello, Beppe Fenech Adami, Joe Giglio
-- Institutions: NSO, Central Bank of Malta, European Commission, IMF,
-  Planning Authority, Housing Authority, Electoral Commission, Commissioner
-  for Standards, Auditor General, Office of the Prime Minister
-- Named NGOs, unions, or named individuals with a clear role
+- Named NGOs, unions, or named individuals with a clear political role
+
+CRITICAL RULE — DATA INSTITUTIONS ARE NOT SPEAKERS:
+The following are DATA SOURCES used to VERIFY claims. They are NOT claim-makers.
+NEVER set the speaker to any of these — if no political actor made the claim, do not extract it:
+  NSO, Eurostat, European Commission, IMF, World Bank, Central Bank of Malta,
+  Planning Authority, Housing Authority, Electoral Commission, TomTom,
+  Transparency International, FocusEconomics, Allianz Trade, KPMG,
+  any statistics office, any ratings agency, any research institution
+
+A claim extracted with speaker = Eurostat or speaker = NSO is WRONG.
+Eurostat and NSO are where we go to CHECK claims — they are not the source of claims.
+
+The correct pattern is:
+  GOOD: Robert Abela said "Malta has the highest employment rate in the EU"
+        → speaker = Robert Abela, verify against Eurostat
+  BAD:  Eurostat data shows Malta's employment rate is 83.6%
+        → This is a data point, not a political claim. Do not extract it.
 
 RULE 2 — THE VERIFIABILITY TEST.
 A claim only enters the fact_check category if a journalist could verify
@@ -491,19 +505,40 @@ def extract_claims(client, article):
 
 # ── Routing ────────────────────────────────────────────────────────────────
 
+# Data institutions are sources to verify AGAINST — never claim-makers
+DATA_INSTITUTIONS = {
+    "nso", "eurostat", "european commission", "imf", "world bank",
+    "central bank of malta", "central bank", "planning authority",
+    "housing authority", "electoral commission", "tomtom", "inrix",
+    "transparency international", "focuseconomics", "allianz trade",
+    "kpmg", "pwc", "oecd", "un", "united nations", "who",
+    "european environment agency", "eea", "era", "transport malta",
+    "infrastructure malta", "mcast", "university of malta",
+    "national statistics office", "statistics office",
+    "scope ratings", "fitch", "moody", "standard & poor",
+    "global property guide", "investropa", "amphora media",
+    "wikipedia", "grokipedia", "reference", "research institution",
+    "news outlet", "international institution", "financial institution",
+    "academic institution", "statistics office",
+}
+
 def route(claim):
     """
     Route by editorial category first, score second.
     Extra gate: fact_check queue requires at least one measurable signal flag.
-    Claims with speaker=unknown cannot enter fact_check queue.
+    Claims with data institution speakers go to archive — they are data points not claims.
+    Claims with unknown speaker go to review for human attribution.
     """
     category = claim.get("editorial_category", "news_event")
     score    = int(claim.get("fact_checkability_score") or 1)
     speaker  = (claim.get("speaker") or "").strip().lower()
 
     if category == "fact_check":
-        # Gate 1: unknown speaker goes to review, not archive
-        # A human can deduce the speaker from the source article
+        # Gate 1: data institutions are sources not speakers — archive these
+        if any(inst in speaker for inst in DATA_INSTITUTIONS):
+            return "archive"
+
+        # Gate 2: unknown speaker goes to review for human attribution
         if speaker in ("unknown", "", "journalist", "reporter", "general public statement"):
             return "review"
 

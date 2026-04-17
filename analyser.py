@@ -98,39 +98,57 @@ Your job is to decide which claims enter the Fact-Check Queue and which go to Ar
 You are tough but fair. You reject noise, vague claims, and things that are
 not actually verifiable. You keep claims that are genuinely useful for fact-checking.
 
-You apply four editorial filters. A claim passes if it meets ANY ONE:
-  COUNTER_CLAIM — Is there a known named politician, institution or credible
-                  source who publicly disputes this? (not just a different opinion
-                  but an actual factual dispute)
-  RANKING       — Does it place Malta in a specific position relative to
-                  other countries, EU members, or globally? Rankings are
-                  always worth checking.
-  HISTORICAL    — Does it compare Malta's current situation to a past figure,
-                  trend, or benchmark? (e.g. debt fell from X to Y, rents
-                  doubled since 2022, GDP grew faster than in 2019)
-  OPPONENT      — Is it a verifiable claim made by one political party
-                  about the policies, record, or statements of the other party?
+HARD RULE — SPEAKER MUST BE A POLITICAL ACTOR:
+Reject immediately if the speaker is a data institution such as Eurostat, NSO,
+IMF, European Commission, Central Bank, TomTom, Transparency International,
+or any statistics office or research body. These are sources used to VERIFY
+claims — they are not political claim-makers. If the speaker is one of these,
+verdict is ARCHIVE, filter is NONE.
+
+You apply five editorial filters. A claim passes if it meets ANY ONE:
+
+  COUNTER_CLAIM     — Is there a known named politician, institution or credible
+                      source who publicly disputes this? An actual factual dispute,
+                      not just a different opinion.
+
+  RANKING           — Does it place Malta in a specific position relative to
+                      other countries, EU members, or globally? Rankings are
+                      always worth checking.
+
+  HISTORICAL        — Does it compare Malta's current situation to a past figure,
+                      trend, or benchmark? (e.g. debt fell from X to Y, rents
+                      doubled since 2022, GDP grew faster than in 2019)
+
+  OPPONENT          — Is it a verifiable claim made by one political party
+                      about the policies, record, or statements of the other party?
+
+  CONTRADICTS_PAST  — Does this new claim contradict or update a previously
+                      accepted claim in our database? If a past claim said
+                      "debt is at 47%" and this new claim says "debt is at 52%"
+                      then both the old and new claim are worth examining together.
+                      This filter also applies if a politician made a past claim
+                      that new data now appears to disprove.
 
 If the claim passes none of these filters: ARCHIVE it.
 If the claim is borderline or you are genuinely unsure: REVIEW.
 If the claim clearly passes at least one: FACT_CHECK.
 
 Be direct. Challenge the proposer's arguments. Do not be persuaded by enthusiasm
-alone — demand specificity. After round 2 or 3, give your final verdict as:
-
-VERDICT: FACT_CHECK | REVIEW | ARCHIVE
-FILTER: COUNTER_CLAIM | RANKING | HISTORICAL | OPPONENT | NONE
-COUNTER_CLAIM_TEXT: [text of counter-claim if found, or null]
-REASON: [one sentence]"""
+alone — demand specificity. After round 2 or 3, give your final verdict."""
 
 GATEKEEPER_OPENING = """The proposer is bringing you this claim for the Fact-Check Queue.
-Read their argument and challenge it. Apply your four filters strictly.
+Read their argument and challenge it. Apply your five filters strictly.
 After 2-3 rounds you will give a final verdict.
 
 Proposer's argument: {proposer_opening}
 
-Challenge the claim. Ask the hard questions. Is it specific enough?
-Does it actually pass any of your four filters?"""
+{past_claims_context}
+
+Challenge the claim. Ask the hard questions:
+- Is the speaker a data institution? If so, reject immediately.
+- Is it specific enough to verify?
+- Does it pass any of your five filters?
+- Does it contradict or update any past claim listed above?"""
 
 VERDICT_PROMPT = """Based on the debate so far, give your final verdict now.
 
@@ -138,18 +156,69 @@ You must respond ONLY with valid JSON — no other text:
 
 {{
   "verdict": "FACT_CHECK or REVIEW or ARCHIVE",
-  "passed_filter": "COUNTER_CLAIM or RANKING or HISTORICAL or OPPONENT or NONE",
+  "passed_filter": "COUNTER_CLAIM or RANKING or HISTORICAL or OPPONENT or CONTRADICTS_PAST or NONE",
   "counter_claim": "text of counter-claim if COUNTER_CLAIM filter passed, else null",
+  "contradicts_past": "description of which past claim this contradicts or updates, else null",
   "reason": "one sentence explaining the verdict",
   "debate_summary": "2-3 sentence summary of the key points from the debate"
 }}"""
 
+# ── Past claims context ───────────────────────────────────────────────────
+
+def load_past_claims(limit=200):
+    """Load recent accepted claims from the fact_check_queue for context."""
+    rows = load_csv(STAGING_FILE)
+    # Only return analysed claims (have analysed_at set)
+    past = [r for r in rows if r.get("analysed_at") and r.get("atomic_claim")]
+    # Return most recent N claims
+    return past[-limit:]
+
+def find_related_past_claims(new_claim, past_claims, max_results=5):
+    """
+    Find past claims on the same topic as the new claim.
+    Uses simple keyword overlap — cheap and fast, no API call needed.
+    """
+    new_words = set(new_claim.lower().split())
+    # Remove common stop words
+    stopwords = {"the", "a", "an", "is", "are", "was", "were", "of", "in",
+                 "to", "and", "or", "for", "that", "this", "with", "by",
+                 "at", "from", "has", "have", "had", "it", "its", "on",
+                 "as", "be", "been", "will", "would", "could", "should",
+                 "per", "than", "more", "less", "not", "no", "but"}
+    new_words -= stopwords
+
+    scored = []
+    for row in past_claims:
+        past_text = row.get("atomic_claim", "").lower()
+        past_words = set(past_text.split()) - stopwords
+        overlap = len(new_words & past_words)
+        if overlap >= 2:  # at least 2 meaningful words in common
+            scored.append((overlap, row))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [r for _, r in scored[:max_results]]
+
+def format_past_claims_context(related):
+    """Format related past claims as context for the Gatekeeper."""
+    if not related:
+        return "No related past claims found in the database."
+    lines = ["Related past claims already in the database:"]
+    for r in related:
+        lines.append("  - [{}] {} — {} ({})".format(
+            r.get("publication_date", "?"),
+            r.get("atomic_claim", "")[:100],
+            r.get("speaker", "?"),
+            r.get("passed_filter", "?"),
+        ))
+    return "\n".join(lines)
+
 # ── Debate engine ──────────────────────────────────────────────────────────
 
-def run_debate(client, row, rounds=2):
+def run_debate(client, row, rounds=2, past_claims_context=""):
     """
     Run a multi-agent debate between Proposer and Gatekeeper.
     Returns a verdict dict.
+    past_claims_context: formatted string of related past claims for Gatekeeper.
     """
     atomic    = row.get("atomic_claim", "").strip()
     speaker   = row.get("speaker", "unknown")
@@ -186,7 +255,8 @@ def run_debate(client, row, rounds=2):
         {
             "role": "user",
             "content": GATEKEEPER_OPENING.format(
-                proposer_opening=proposer_opening
+                proposer_opening=proposer_opening,
+                past_claims_context=past_claims_context,
             )
         }
     ]
@@ -302,6 +372,27 @@ def rewrite_csv(path, rows):
 
 # ── Main ───────────────────────────────────────────────────────────────────
 
+# Data institutions are sources not speakers — skip debate, archive immediately
+DATA_INSTITUTIONS = {
+    "nso", "eurostat", "european commission", "imf", "world bank",
+    "central bank of malta", "central bank", "planning authority",
+    "housing authority", "electoral commission", "tomtom", "inrix",
+    "transparency international", "focuseconomics", "allianz trade",
+    "kpmg", "pwc", "oecd", "un ", "united nations", "who",
+    "european environment agency", "eea", "era", "transport malta",
+    "infrastructure malta", "scope ratings", "fitch", "moody",
+    "national statistics office", "statistics office",
+    "global property guide", "investropa", "amphora media",
+    "wikipedia", "grokipedia", "reference", "research institution",
+    "news outlet", "international institution", "financial institution",
+    "academic institution",
+}
+
+def is_data_institution(speaker):
+    s = (speaker or "").strip().lower()
+    return any(inst in s for inst in DATA_INSTITUTIONS)
+
+
 def main():
     if not API_KEY:
         print("ERROR: ANTHROPIC_API_KEY not set.")
@@ -337,8 +428,24 @@ def main():
     print("\n[Running debates...]\n")
 
     for i, row in enumerate(pending):
-        atomic = row.get("atomic_claim", "").strip()
+        atomic  = row.get("atomic_claim", "").strip()
+        speaker = row.get("speaker", "")
         print("  [{}/{}] {}...".format(i+1, len(pending), atomic[:60]))
+
+        # Fast-path: data institutions are sources not speakers — archive immediately
+        if is_data_institution(speaker):
+            row["counter_claim"]   = ""
+            row["passed_filter"]   = "NONE"
+            row["debate_summary"]  = "Speaker is a data institution not a political actor. Data institutions are sources used to verify claims — they do not make political claims."
+            row["analysed_at"]     = analysed_at
+            row["status"]          = "archived_by_analyser"
+            row["needs_human_review"] = "FALSE"
+            row["rejection_reason"] = "Speaker is {} — a data source not a political actor".format(speaker)
+            append_row(ARCHIVE_FILE, row)
+            debated_claims.add(atomic.lower())
+            counts["archive"] += 1
+            print("     → ARCHIVE [data institution: {}]".format(speaker))
+            continue
 
         verdict = run_debate(client, row, rounds=2)
 
