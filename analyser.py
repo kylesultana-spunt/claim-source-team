@@ -46,9 +46,13 @@ DATA_DIR = os.environ.get(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 )
 
-STAGING_FILE = os.path.join(DATA_DIR, "fact_check_queue.csv")
-REVIEW_FILE  = os.path.join(DATA_DIR, "review_queue.csv")
-ARCHIVE_FILE = os.path.join(DATA_DIR, "archive.csv")
+STAGING_FILE  = os.path.join(DATA_DIR, "fact_check_queue.csv")
+REVIEW_FILE   = os.path.join(DATA_DIR, "review_queue.csv")
+ARCHIVE_FILE  = os.path.join(DATA_DIR, "archive.csv")
+# Analyser processes BOTH queues — fact_check_queue (strong candidates)
+# and review_queue (proposals, weak claims, borderline items that may
+# contain hidden factual assertions worth extracting)
+INPUT_FILES   = [STAGING_FILE, REVIEW_FILE]
 
 CSV_COLUMNS = [
     "claim_text", "atomic_claim", "speaker", "role", "party",
@@ -97,6 +101,30 @@ Your job is to decide which claims enter the Fact-Check Queue and which go to Ar
 
 You are tough but fair. You reject noise, vague claims, and things that are
 not actually verifiable. You keep claims that are genuinely useful for fact-checking.
+
+PRIMARY TEST — apply this before anything else:
+"Could a journalist verify or disprove this against a specific published dataset,
+law, official document, or observable fact?"
+
+If the answer is NO — archive immediately.
+If the answer is YES or MAYBE — proceed to the filters below.
+
+Examples of claims that PASS the primary test:
+  "Malta's debt-to-GDP ratio fell from 70% to 47%"   → YES, Eurostat data exists
+  "The constitutional deadline passed in March 2026"  → YES, Constitution and calendar
+  "Nobody is buying property"                         → MAYBE, NSO deeds data exists
+  "Malta ranked first in EU for employment"           → YES, Eurostat data exists
+
+Examples of claims that FAIL the primary test:
+  "This policy will help families"                    → NO, not falsifiable
+  "The government announced a new scheme"             → NO, this is a news event not a claim
+  "Labour has failed the Maltese people"              → NO, value judgement
+
+ALSO NOTE — if the claim is a proposal or announcement, ask:
+Does it contain a factual assertion within it?
+"We propose this because housing prices doubled" → extract "housing prices doubled", not the proposal.
+If the claim reaching you IS already the assertion — proceed.
+If it is still just the announcement — archive it.
 
 HARD RULE — SPEAKER MUST BE A POLITICAL ACTOR:
 Reject immediately if the speaker is a data institution such as Eurostat, NSO,
@@ -589,11 +617,15 @@ def main():
             print("     [pausing 15s to respect rate limits]")
             time.sleep(15)
 
-    # Remove debated rows from staging (keep already-analysed ones)
-    remaining = [r for r in staging_rows
-                 if r.get("atomic_claim", "").strip().lower()
-                 not in debated_claims]
-    rewrite_csv(STAGING_FILE, remaining)
+    # Remove debated rows from their source files
+    remaining_staging = [r for r in staging_rows
+                         if r.get("atomic_claim", "").strip().lower()
+                         not in debated_claims]
+    remaining_review  = [r for r in review_rows
+                         if r.get("atomic_claim", "").strip().lower()
+                         not in debated_claims]
+    rewrite_csv(STAGING_FILE, remaining_staging)
+    rewrite_csv(REVIEW_FILE, remaining_review)
 
     total = sum(counts.values())
     print("\n" + "=" * 60)
