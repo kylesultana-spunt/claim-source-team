@@ -262,27 +262,52 @@ TOPIC_SIGNALS = {
     'HEALTH':      ['hospital', 'mater dei', 'waiting'],
 }
 
-def get_topic(claim_text):
-    text = claim_text.lower()
-    topics = []
-    for topic, signals in TOPIC_SIGNALS.items():
-        if any(s in text for s in signals):
-            topics.append(topic)
-    return set(topics)
+def word_overlap_ratio(text_a, text_b):
+    """
+    Measure how similar two claim texts are by word overlap.
+    Returns a ratio 0.0 to 1.0. High ratio = very similar assertion.
+    """
+    STOPWORDS = {
+        "the", "a", "an", "is", "are", "was", "were", "of", "in", "to",
+        "and", "or", "for", "that", "this", "with", "by", "at", "from",
+        "has", "have", "had", "it", "its", "on", "as", "be", "been",
+        "will", "would", "could", "should", "per", "than", "not", "no",
+        "but", "also", "said", "says", "stated", "claimed", "according",
+        "malta", "maltese", "government", "party", "minister",
+    }
+    def key_words(text):
+        return set(w for w in text.lower().split() if w not in STOPWORDS and len(w) > 3)
+
+    words_a = key_words(text_a)
+    words_b = key_words(text_b)
+    if not words_a or not words_b:
+        return 0.0
+    intersection = words_a & words_b
+    union = words_a | words_b
+    return len(intersection) / len(union)
+
+DUPLICATE_THRESHOLD = 0.55  # claims sharing >55% of key words are considered duplicates
 
 def is_duplicate(new_claim, new_speaker, past_claims):
-    """Returns (is_dup, reason). True if same speaker + topic already in past_claims."""
-    new_topics = get_topic(new_claim)
+    """
+    Returns (is_dup, reason).
+    True only if a past claim from the same speaker has HIGH word overlap
+    with the new claim — meaning they are saying the same thing.
+    
+    Same speaker + same topic is NOT enough.
+    Same speaker + same assertion IS enough.
+    """
     new_spk = (new_speaker or '').strip().lower()
+
     for past in past_claims:
         past_spk = (past.get('speaker') or '').strip().lower()
         if new_spk != past_spk:
             continue
-        past_topics = get_topic(past.get('atomic_claim', ''))
-        overlap = new_topics & past_topics
-        if overlap:
-            return True, "Similar {} claim from {} already exists: {}...".format(
-                '|'.join(overlap), past_spk, past.get('atomic_claim', '')[:60]
+        past_text = past.get('atomic_claim', '')
+        ratio = word_overlap_ratio(new_claim, past_text)
+        if ratio >= DUPLICATE_THRESHOLD:
+            return True, "Same assertion ({:.0%} word overlap) from {} already exists: {}...".format(
+                ratio, past_spk, past_text[:60]
             )
     return False, None
 
