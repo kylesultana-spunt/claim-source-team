@@ -3,11 +3,16 @@
 Commands:
     collect  - pull RSS feeds, fetch new articles into inbox.csv
     extract  - turn inbox articles into pending atomic claims
-    analyse  - classify pending claims into the three queues
+    analyse  - (optional, off by default) AI-classify pending claims into
+               fact_check / review / rhetoric queues. No longer part of the
+               scheduled ingest; editors triage from pending_claims.csv via
+               the admin portal instead.
     verdict  - generate automated verdicts for approved_for_check claims
-    ingest   - collect + extract + analyse (no verdict step — cheap/fast,
-               used by the twice-daily scheduled run)
-    all      - run the full pipeline in order, including verdicts
+    ingest   - collect + extract ONLY. Everything new lands in
+               pending_claims.csv for a human to sort in the admin portal.
+    all      - run every stage (collect + extract + analyse + verdict).
+               Mainly for debugging; the normal live flow is
+               ingest -> manual triage in admin -> verdict.
 """
 from __future__ import annotations
 
@@ -82,7 +87,9 @@ def main() -> None:
     elif args.command == "ingest":
         cmd_collect(p)
         cmd_extract(p)
-        cmd_analyse(p)
+        # Note: no analyser. Pending claims sit in pending_claims.csv for a
+        # human editor to triage via the admin portal. This is deliberate —
+        # the editor decides what gets fact-checked, not the model.
     elif args.command == "all":
         cmd_collect(p)
         cmd_extract(p)

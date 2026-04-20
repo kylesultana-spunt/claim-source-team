@@ -16,8 +16,10 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import re
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
+from urllib.parse import urljoin
 
 import feedparser  # type: ignore
 import httpx
@@ -80,6 +82,57 @@ def fetch_article_text(url: str, client: httpx.Client) -> Optional[str]:
     return text
 
 
+# ---------------------------------------------------------------- feed discovery
+# Outlets don't always publish their RSS at a predictable URL, and URLs drift
+# over time. To make this resilient, when the configured `rss` URL returns
+# nothing, we (a) try a handful of common fallback paths and (b) scrape the
+# landing page for `<link rel="alternate" type="application/rss+xml">` tags.
+_COMMON_FEED_PATHS = [
+    "/feed/", "/feed", "/rss", "/rss/", "/rss.xml", "/feed.xml",
+    "/atom.xml", "/index.xml", "/news/feed/", "/en/feed/",
+]
+
+_FEED_LINK_RE = re.compile(
+    r'<link[^>]+rel=["\']alternate["\'][^>]*'
+    r'type=["\']application/(?:rss|atom)\+xml["\'][^>]*href=["\']([^"\']+)["\']',
+    re.IGNORECASE,
+)
+
+
+def _feed_has_entries(url: str) -> bool:
+    try:
+        feed = feedparser.parse(url)
+        return bool(getattr(feed, "entries", None))
+    except Exception:
+        return False
+
+
+def discover_feed(site_url: str, client: httpx.Client) -> Optional[str]:
+    """Try to find a working feed URL starting from the site's landing page.
+
+    Order of attempts:
+    1. Common paths (/feed/, /rss, /rss.xml, ...)
+    2. <link rel="alternate"> tags in the landing page HTML
+    """
+    base = site_url.rstrip("/")
+    for path in _COMMON_FEED_PATHS:
+        candidate = base + path
+        if _feed_has_entries(candidate):
+            return candidate
+    # Fall back to scraping the landing page for a declared feed link.
+    try:
+        r = client.get(site_url, headers={"User-Agent": USER_AGENT},
+                       timeout=FETCH_TIMEOUT, follow_redirects=True)
+        r.raise_for_status()
+    except httpx.HTTPError:
+        return None
+    for m in _FEED_LINK_RE.finditer(r.text):
+        candidate = urljoin(site_url, m.group(1))
+        if _feed_has_entries(candidate):
+            return candidate
+    return None
+
+
 def parse_publication_date(entry) -> str:
     for attr in ("published", "updated", "created"):
         raw = getattr(entry, attr, None)
@@ -107,10 +160,24 @@ def run(inbox_path: Path, sources_path: Path,
     with httpx.Client() as client:
         for source in sources:
             rss = source.get("rss")
-            if not rss:
+            site = source.get("site")
+            feed = feedparser.parse(rss) if rss else None
+            # If the configured RSS didn't give us any entries, try to find a
+            # working feed by (a) common URL patterns and (b) parsing the
+            # landing page's <link rel="alternate"> tags.
+            if (not feed or not feed.entries) and site:
+                discovered = discover_feed(site, client)
+                if discovered:
+                    log.info("source: %s  auto-discovered feed: %s (configured=%s)",
+                             source["name"], discovered, rss or "<none>")
+                    rss = discovered
+                    feed = feedparser.parse(rss)
+            if not feed or not feed.entries:
+                log.warning("source: %s  no feed found (configured=%s, site=%s)",
+                            source["name"], rss or "<none>", site or "<none>")
                 continue
-            log.info("source: %s  rss: %s", source["name"], rss)
-            feed = feedparser.parse(rss)
+            log.info("source: %s  rss: %s  entries=%d",
+                     source["name"], rss, len(feed.entries))
             kept = 0
             for entry in feed.entries:
                 if kept >= max_per_source:
