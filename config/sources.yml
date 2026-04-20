@@ -41,12 +41,21 @@ sources:
     sections: []
     keywords: [minister, mp, budget, election, parliament, government, opposition, pn, pl, abela, borg, caruana]
 
-  - name: The Shift News
-    rss: https://theshiftnews.com/feed/
-    site: https://theshiftnews.com/
+  - name: Times of Malta
+    rss: https://timesofmalta.com/rss
+    site: https://timesofmalta.com/
     political_only: false
-    sections: []
+    sections: ["/news/", "/article/"]
     keywords: [minister, mp, budget, election, parliament, government, opposition, pn, pl, abela, borg, caruana]
+
+  - name: One News
+    rss: https://www.one.com.mt/feed/
+    site: https://www.one.com.mt/
+    # One News is the Labour-party-owned broadcaster's newsroom — treat every
+    # item as political by default rather than filtering by keywords.
+    political_only: true
+    sections: []
+    keywords: []
 
 # Known political figures. Used by the extractor to improve speaker attribution.
 politicians:
