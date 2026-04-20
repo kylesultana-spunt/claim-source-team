@@ -1,0 +1,72 @@
+# Maltese news sources monitored for political claims.
+# - `rss`: preferred RSS feed URL.
+# - `site`: landing page, used as the fallback when RSS is missing.
+# - `political_only`: if true, use all items; if false, filter by keyword/section.
+# - `sections`: URL path prefixes to keep (for outlets that publish broadly).
+# - `keywords`: extra keyword whitelist (lowercased match in title/summary).
+
+sources:
+  - name: Newsbook
+    rss: https://newsbook.com.mt/en/feed/
+    site: https://newsbook.com.mt/en/
+    political_only: false
+    sections: ["/en/", "/mt/"]
+    keywords: [minister, mp, budget, election, parliament, government, opposition, pn, pl, abela, borg, caruana, agius]
+
+  - name: Lovin Malta
+    rss: https://lovinmalta.com/feed/
+    site: https://lovinmalta.com/
+    political_only: false
+    sections: ["/news/", "/malta/"]
+    keywords: [minister, mp, budget, election, parliament, government, opposition, pn, pl, abela, borg, caruana]
+
+  - name: The Malta Independent
+    rss: https://www.independent.com.mt/rss
+    site: https://www.independent.com.mt/
+    political_only: false
+    sections: ["/articles/"]
+    keywords: [minister, mp, budget, election, parliament, government, opposition, pn, pl, abela, borg, caruana]
+
+  - name: MaltaToday
+    rss: https://www.maltatoday.com.mt/rss
+    site: https://www.maltatoday.com.mt/
+    political_only: false
+    sections: ["/news/"]
+    keywords: [minister, mp, budget, election, parliament, government, opposition, pn, pl, abela, borg, caruana]
+
+  - name: Live News Malta
+    rss: https://livenewsmalta.com/feed/
+    site: https://livenewsmalta.com/
+    political_only: false
+    sections: []
+    keywords: [minister, mp, budget, election, parliament, government, opposition, pn, pl, abela, borg, caruana]
+
+  - name: The Shift News
+    rss: https://theshiftnews.com/feed/
+    site: https://theshiftnews.com/
+    political_only: false
+    sections: []
+    keywords: [minister, mp, budget, election, parliament, government, opposition, pn, pl, abela, borg, caruana]
+
+# Known political figures. Used by the extractor to improve speaker attribution.
+politicians:
+  - name: Robert Abela
+    role: Prime Minister
+    party: PL
+    aliases: [Abela, Dr Abela, Prime Minister Abela, PM Abela]
+  - name: Alex Borg
+    role: Leader of the Opposition
+    party: PN
+    aliases: [Borg, Alex Borg, Opposition Leader Borg]
+  - name: Ian Borg
+    role: Deputy Prime Minister
+    party: PL
+    aliases: [Ian Borg, Deputy PM Borg, Foreign Minister Borg]
+  - name: Clyde Caruana
+    role: Minister for Finance and Employment
+    party: PL
+    aliases: [Caruana, Minister Caruana, Finance Minister Caruana]
+  - name: Alex Agius Saliba
+    role: Labour Deputy Leader
+    party: PL
+    aliases: [Agius Saliba, Alex Agius Saliba]
