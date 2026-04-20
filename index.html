@@ -94,6 +94,15 @@
       padding: 10px 8px; border-bottom: 1px solid var(--border);
       position: sticky; top: 0; background: var(--bg);
     }
+    thead th.sortable { cursor: pointer; user-select: none; }
+    thead th.sortable:hover { color: var(--text); }
+    thead th.sorted { color: var(--accent); }
+    thead th.sortable::after {
+      content: ""; display: inline-block; width: 0.8em; margin-left: 4px;
+      color: var(--muted); opacity: 0.5;
+    }
+    thead th.sorted.asc::after  { content: "▲"; opacity: 1; color: var(--accent); }
+    thead th.sorted.desc::after { content: "▼"; opacity: 1; color: var(--accent); }
     tbody td { padding: 10px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
     tbody tr { cursor: pointer; }
     tbody tr:hover { background: var(--panel); }
@@ -288,7 +297,20 @@ const QUEUES = [
 ];
 
 const PW_KEY = "spunt_admin_pw";
-let state = { data: {}, active: "fact_check_queue", selected: null };
+// Default sort: newest-added first. That way when you open any tab, the most
+// recently-collected claims are at the top, and you can instantly see
+// whether the last pipeline run added anything new.
+const DEFAULT_SORT = {
+  inbox:   { key: "fetched_at",  dir: "desc" },
+  queue:   { key: "fetched_at",  dir: "desc" },
+  verdict: { key: "checked_at",  dir: "desc" },
+};
+// Which columns are numeric (parse before compare). Everything else is a
+// string compare, which also works for ISO-ish dates like "2026-04-06" and
+// "2026-04-20 14:02 UTC".
+const NUMERIC_KEYS = new Set(["fact_checkability_score", "confidence"]);
+
+let state = { data: {}, active: "fact_check_queue", selected: null, sort: null };
 
 // ------------------------------------------------------------------- helpers
 const $ = (s) => document.querySelector(s);
@@ -345,6 +367,56 @@ function parseCSV(text) {
 }
 
 function esc(s) { return String(s ?? "").replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
+
+// ----- sorting ----------------------------------------------------------
+function sortRows(rows, sort) {
+  if (!sort || !sort.key) return rows;
+  const { key, dir } = sort;
+  const isNum = NUMERIC_KEYS.has(key);
+  const mult = dir === "asc" ? 1 : -1;
+  return [...rows].sort((a, b) => {
+    let av = a[key] ?? "", bv = b[key] ?? "";
+    if (isNum) {
+      av = parseFloat(av) || 0;
+      bv = parseFloat(bv) || 0;
+      return (av - bv) * mult;
+    }
+    // String / date compare. Empty strings sink to the bottom regardless
+    // of direction so "unknown" dates don't dominate the top of the list.
+    if (av === "" && bv !== "") return 1;
+    if (bv === "" && av !== "") return -1;
+    return String(av).localeCompare(String(bv)) * mult;
+  });
+}
+
+function onHeaderClick(key) {
+  const cur = state.sort || {};
+  if (cur.key === key) {
+    // same column: cycle asc → desc → off
+    if (cur.dir === "asc")  state.sort = { key, dir: "desc" };
+    else if (cur.dir === "desc") state.sort = null;
+    else                     state.sort = { key, dir: "asc" };
+  } else {
+    // new column: date-ish columns default to desc (newest first),
+    // everything else ascending.
+    const dir = /(_at|_date)$/.test(key) ? "desc" : "asc";
+    state.sort = { key, dir };
+  }
+  render();
+}
+
+function headerCell(label, key) {
+  const s = state.sort;
+  const cls = ["sortable"];
+  if (s && s.key === key) cls.push("sorted", s.dir);
+  return `<th class="${cls.join(" ")}" data-sort="${esc(key)}">${esc(label)}</th>`;
+}
+
+function wireHeaders(el) {
+  el.querySelectorAll("thead th.sortable").forEach(th => {
+    th.addEventListener("click", () => onHeaderClick(th.dataset.sort));
+  });
+}
 
 function badgeForStatus(s) {
   if (s === "approved_for_check") return '<span class="badge ok">approved</span>';
@@ -433,7 +505,11 @@ function renderTabs() {
     `<button class="tab ${q.id === state.active ? "active" : ""}" data-id="${q.id}">${q.label}</button>`
   ).join("");
   $$("#tabs .tab").forEach(t => t.addEventListener("click", () => {
-    state.active = t.dataset.id; renderTabs(); render();
+    state.active = t.dataset.id;
+    // Reset to the default sort for this tab type (newest-added first).
+    const kind = QUEUES.find(q => q.id === state.active).kind;
+    state.sort = { ...(DEFAULT_SORT[kind] || null) };
+    renderTabs(); render();
   }));
 }
 
@@ -455,6 +531,11 @@ function render() {
   const fp = $("#filterParty").value;
   const fs = $("#filterSource").value;
 
+  // Set a default sort for this tab if none is active yet.
+  if (!state.sort || !state.sort.key) {
+    state.sort = { ...(DEFAULT_SORT[q.kind] || null) };
+  }
+
   const filtered = rows.filter(r => {
     if (fp && (r.party || "") !== fp) return false;
     if (fs && (r.source_name || "") !== fs) return false;
@@ -464,21 +545,28 @@ function render() {
     return hay.includes(search);
   });
 
-  const listEl = $("#list");
-  if (!filtered.length) { listEl.innerHTML = `<div class="empty">No rows match your filters.</div>`; return; }
+  const sorted = sortRows(filtered, state.sort);
 
-  if (q.kind === "verdict") return renderVerdicts(listEl, filtered);
-  if (q.kind === "inbox")   return renderInbox(listEl, filtered);
-  return renderQueue(listEl, filtered);
+  const listEl = $("#list");
+  if (!sorted.length) { listEl.innerHTML = `<div class="empty">No rows match your filters.</div>`; return; }
+
+  if (q.kind === "verdict") return renderVerdicts(listEl, sorted);
+  if (q.kind === "inbox")   return renderInbox(listEl, sorted);
+  return renderQueue(listEl, sorted);
 }
 
 function renderQueue(el, rows) {
   el.innerHTML = `
     <table>
       <thead><tr>
-        <th>Claim</th><th>Speaker</th><th>Source</th>
-        <th>Type</th><th>Status</th><th class="score">Score</th>
-        <th>Claim date</th><th>Added to CSV</th>
+        ${headerCell("Claim", "atomic_claim")}
+        ${headerCell("Speaker", "speaker")}
+        ${headerCell("Source", "source_name")}
+        ${headerCell("Type", "claim_type")}
+        ${headerCell("Status", "status")}
+        ${headerCell("Score", "fact_checkability_score")}
+        ${headerCell("Claim date", "publication_date")}
+        ${headerCell("Added to CSV", "fetched_at")}
       </tr></thead>
       <tbody>
         ${rows.map((r, i) => `
@@ -495,6 +583,7 @@ function renderQueue(el, rows) {
         `).join("")}
       </tbody>
     </table>`;
+  wireHeaders(el);
   el.querySelectorAll("tbody tr").forEach(tr => tr.addEventListener("click", () => openSide(rows[tr.dataset.i])));
 }
 
@@ -502,8 +591,11 @@ function renderInbox(el, rows) {
   el.innerHTML = `
     <table>
       <thead><tr>
-        <th>Raw statement</th><th>Source</th>
-        <th>Claim date</th><th>Added to CSV</th><th>Processed</th>
+        ${headerCell("Raw statement", "raw_statement")}
+        ${headerCell("Source", "source_name")}
+        ${headerCell("Claim date", "publication_date")}
+        ${headerCell("Added to CSV", "fetched_at")}
+        ${headerCell("Processed", "processed")}
       </tr></thead>
       <tbody>
         ${rows.map((r, i) => `
@@ -517,6 +609,7 @@ function renderInbox(el, rows) {
         `).join("")}
       </tbody>
     </table>`;
+  wireHeaders(el);
   el.querySelectorAll("tbody tr").forEach(tr => tr.addEventListener("click", () => openSide(rows[tr.dataset.i])));
 }
 
@@ -524,9 +617,13 @@ function renderVerdicts(el, rows) {
   el.innerHTML = `
     <table>
       <thead><tr>
-        <th>Claim</th><th>Speaker</th><th>Verdict</th>
-        <th>Confidence</th><th>Review?</th>
-        <th>Claim date</th><th>Checked at</th>
+        ${headerCell("Claim", "atomic_claim")}
+        ${headerCell("Speaker", "speaker")}
+        ${headerCell("Verdict", "verdict")}
+        ${headerCell("Confidence", "confidence")}
+        ${headerCell("Review?", "requires_review")}
+        ${headerCell("Claim date", "publication_date")}
+        ${headerCell("Checked at", "checked_at")}
       </tr></thead>
       <tbody>
         ${rows.map((r, i) => `
