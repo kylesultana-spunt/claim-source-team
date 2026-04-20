@@ -33,8 +33,13 @@ log = logging.getLogger("spunt.verdict")
 WEB_SEARCH_TOOL = {
     "type": "web_search_20250305",
     "name": "web_search",
-    "max_uses": 5,
+    "max_uses": 2,
 }
+
+# Pause between verdict calls to stay under Anthropic rate limits (Tier 1
+# allows 30K input tokens/min). A few seconds is enough to avoid the 429
+# retry-storm we hit on the first run.
+INTER_CLAIM_PAUSE_SEC = 3.0
 
 
 def _load_prompt(prompts_dir: Path) -> str:
@@ -84,8 +89,10 @@ def _verdict_to_row(claim_row: Dict, result: Dict, model: str) -> VerdictRow:
 
 
 def run(fact_check_path: Path, verdicts_path: Path, prompts_dir: Path,
-        max_per_run: int = 20) -> int:
+        max_per_run: int = 10) -> int:
     """Generate verdicts for up to `max_per_run` unverdicted claims."""
+    import time
+
     system_prompt = _load_prompt(prompts_dir)
 
     claims = read_csv(fact_check_path)
@@ -97,12 +104,17 @@ def run(fact_check_path: Path, verdicts_path: Path, prompts_dir: Path,
 
     for row in claims:
         if processed >= max_per_run:
+            log.info("verdict: hit max_per_run=%d, stopping for this run", max_per_run)
             break
         key = (row.get("atomic_claim", ""), row.get("source_url", ""))
         if key in done:
             continue
         if row.get("status") != "approved_for_check":
             continue
+
+        # Be nice to the rate limiter on all but the first call.
+        if processed > 0:
+            time.sleep(INTER_CLAIM_PAUSE_SEC)
 
         try:
             result = chat_json(
@@ -115,14 +127,19 @@ def run(fact_check_path: Path, verdicts_path: Path, prompts_dir: Path,
         except Exception as e:
             log.warning("verdict failed for claim %r: %s",
                         row.get("atomic_claim", "")[:80], e)
+            # Persist what we have so a later failure doesn't lose earlier work.
+            if new_verdicts:
+                write_csv_atomic(verdicts_path, VERDICT_COLS,
+                                 verdicts + new_verdicts)
             continue
 
         new_verdicts.append(_verdict_to_row(row, result, MODEL_VERDICT).to_row())
         processed += 1
-
-    if new_verdicts:
+        # Persist after each successful verdict so a mid-run crash never
+        # loses work that's already paid for.
         write_csv_atomic(verdicts_path, VERDICT_COLS,
                          verdicts + new_verdicts)
+
     return len(new_verdicts)
 
 
