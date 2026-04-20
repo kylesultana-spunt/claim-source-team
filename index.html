@@ -43,17 +43,8 @@
     .btn.primary:hover { filter: brightness(0.95); }
     .btn.danger { color: var(--bad); border-color: #3a2326; }
     .btn.danger:hover { background: #2a1c1f; }
+    .btn.small { padding: 4px 10px; font-size: 12px; }
     .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-
-    /* Inline per-row triage buttons in the Claims tab. Smaller and tighter
-       than main-chrome buttons so three fit on one row without wrapping. */
-    .btn.triage { padding: 4px 9px; font-size: 12px; margin-left: 4px; }
-    .btn.triage.tri-fact     { color: var(--ok);   border-color: #1f3b2b; }
-    .btn.triage.tri-fact:hover     { background: #122018; }
-    .btn.triage.tri-rhetoric { color: var(--warn); border-color: #3b2f14; }
-    .btn.triage.tri-rhetoric:hover { background: #231c0d; }
-    .btn.triage.tri-reject   { color: var(--bad);  border-color: #3a2326; }
-    .btn.triage.tri-reject:hover   { background: #241517; }
 
     /* Login gate */
     .gate {
@@ -104,18 +95,11 @@
       padding: 10px 8px; border-bottom: 1px solid var(--border);
       position: sticky; top: 0; background: var(--bg);
     }
-    thead th.sortable { cursor: pointer; user-select: none; }
-    thead th.sortable:hover { color: var(--text); }
-    thead th.sorted { color: var(--accent); }
-    thead th.sortable::after {
-      content: ""; display: inline-block; width: 0.8em; margin-left: 4px;
-      color: var(--muted); opacity: 0.5;
-    }
-    thead th.sorted.asc::after  { content: "▲"; opacity: 1; color: var(--accent); }
-    thead th.sorted.desc::after { content: "▼"; opacity: 1; color: var(--accent); }
     tbody td { padding: 10px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
     tbody tr { cursor: pointer; }
     tbody tr:hover { background: var(--panel); }
+    td.actions-cell { white-space: nowrap; }
+    td.actions-cell .btn { margin-right: 4px; }
 
     .badge {
       display: inline-block; font-size: 11px; padding: 2px 7px;
@@ -199,8 +183,7 @@
     <span class="meta" id="lastRun">—</span>
     <button class="btn" id="btnRefresh" title="Reload data from CSV">↻ Reload</button>
     <button class="btn" id="btnAdd">+ Add claim</button>
-    <button class="btn primary" id="btnIngest" title="Pull new articles, extract claims, sort them — no verdicts, cheap and fast">▶ Fetch new claims</button>
-    <button class="btn" id="btnVerdict" title="Generate automated verdicts for approved claims — slow and uses API credits">🔍 Run verdicts</button>
+    <button class="btn primary" id="btnRun">▶ Run pipeline</button>
     <button class="btn" id="btnLogout" title="Sign out">↪</button>
   </div>
 </header>
@@ -242,12 +225,10 @@
       <div class="right"><button class="btn" id="btnCloseModal">✕</button></div>
     </header>
     <div class="body">
-      <label>Destination queue</label>
-      <select id="f_queue">
-        <option value="fact_check_queue">Fact-check queue (approved_for_check)</option>
-        <option value="review_queue">Review queue (queued_for_review)</option>
-        <option value="rhetoric_archive">Rhetoric archive (archived_rhetoric)</option>
-      </select>
+      <p class="muted" style="margin:0 0 12px">
+        New claims land in <strong>Claims Raw</strong>. From there you can send them
+        for verification or dismiss them.
+      </p>
 
       <label>Atomic claim *</label>
       <textarea id="f_atomic" rows="3" placeholder="Self-contained claim sentence"></textarea>
@@ -274,19 +255,6 @@
 
       <label>Publication date</label>
       <input id="f_publication_date" type="date" />
-
-      <label>Claim type</label>
-      <select id="f_claim_type">
-        <option>statistical</option><option>comparative</option><option>policy</option>
-        <option>legal</option><option>administrative</option><option>historical</option>
-        <option>rhetorical</option><option>opinion</option>
-      </select>
-
-      <label>Fact-checkability score (1–5)</label>
-      <input id="f_score" type="number" min="1" max="5" value="4" />
-
-      <label>Evidence target</label>
-      <input id="f_evidence_target" placeholder="e.g. NSO statistics" />
     </div>
     <div class="actions">
       <button class="btn" id="btnCancelAdd">Cancel</button>
@@ -299,36 +267,18 @@
 
 <script>
 // ------------------------------------------------------------------- config
+// Two CSVs drive the whole admin now.
+//   claims_raw.csv      — newly-extracted claims, awaiting triage.
+//   sent_to_verify.csv  — claims the editor has promoted. Verdict fields
+//                         are written in-place by the pipeline's verdict
+//                         stage, so this file is also the "results" view.
 const QUEUES = [
-  // "Claims" is the triage tab: every newly extracted claim lands here
-  // and the editor decides (per row) whether to fact-check it, archive it
-  // as rhetoric, or reject it outright. This is the default view.
-  { id: "pending_claims",   label: "Claims",        file: "/data/pending_claims.csv",   kind: "pending" },
-  { id: "inbox",            label: "Inbox",         file: "/data/inbox.csv",            kind: "inbox" },
-  { id: "fact_check_queue", label: "Fact check",    file: "/data/fact_check_queue.csv", kind: "queue" },
-  { id: "review_queue",     label: "Review",        file: "/data/review_queue.csv",     kind: "queue" },
-  { id: "rhetoric_archive", label: "Rhetoric",      file: "/data/rhetoric_archive.csv", kind: "queue" },
-  { id: "verdicts",         label: "Verdicts",      file: "/data/verdicts.csv",         kind: "verdict" },
+  { id: "claims_raw",     label: "Claims Raw",     file: "/data/claims_raw.csv",     kind: "claims_raw" },
+  { id: "sent_to_verify", label: "Sent to Verify", file: "/data/sent_to_verify.csv", kind: "sent_to_verify" },
 ];
 
 const PW_KEY = "spunt_admin_pw";
-// Default sort: newest-added first. That way when you open any tab, the most
-// recently-collected claims are at the top, and you can instantly see
-// whether the last pipeline run added anything new.
-const DEFAULT_SORT = {
-  pending: { key: "fetched_at",  dir: "desc" },
-  inbox:   { key: "fetched_at",  dir: "desc" },
-  queue:   { key: "fetched_at",  dir: "desc" },
-  verdict: { key: "checked_at",  dir: "desc" },
-};
-// Which columns are numeric (parse before compare). Everything else is a
-// string compare, which also works for ISO-ish dates like "2026-04-06" and
-// "2026-04-20 14:02 UTC".
-const NUMERIC_KEYS = new Set(["fact_checkability_score", "confidence"]);
-
-// "pending_claims" is the default tab — that's where the editor triages
-// newly-extracted claims into fact-check / rhetoric / reject.
-let state = { data: {}, active: "pending_claims", selected: null, sort: null };
+let state = { data: {}, active: "claims_raw", selected: null };
 
 // ------------------------------------------------------------------- helpers
 const $ = (s) => document.querySelector(s);
@@ -386,63 +336,14 @@ function parseCSV(text) {
 
 function esc(s) { return String(s ?? "").replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
 
-// ----- sorting ----------------------------------------------------------
-function sortRows(rows, sort) {
-  if (!sort || !sort.key) return rows;
-  const { key, dir } = sort;
-  const isNum = NUMERIC_KEYS.has(key);
-  const mult = dir === "asc" ? 1 : -1;
-  return [...rows].sort((a, b) => {
-    let av = a[key] ?? "", bv = b[key] ?? "";
-    if (isNum) {
-      av = parseFloat(av) || 0;
-      bv = parseFloat(bv) || 0;
-      return (av - bv) * mult;
-    }
-    // String / date compare. Empty strings sink to the bottom regardless
-    // of direction so "unknown" dates don't dominate the top of the list.
-    if (av === "" && bv !== "") return 1;
-    if (bv === "" && av !== "") return -1;
-    return String(av).localeCompare(String(bv)) * mult;
-  });
-}
-
-function onHeaderClick(key) {
-  const cur = state.sort || {};
-  if (cur.key === key) {
-    // same column: cycle asc → desc → off
-    if (cur.dir === "asc")  state.sort = { key, dir: "desc" };
-    else if (cur.dir === "desc") state.sort = null;
-    else                     state.sort = { key, dir: "asc" };
-  } else {
-    // new column: date-ish columns default to desc (newest first),
-    // everything else ascending.
-    const dir = /(_at|_date)$/.test(key) ? "desc" : "asc";
-    state.sort = { key, dir };
-  }
-  render();
-}
-
-function headerCell(label, key) {
-  const s = state.sort;
-  const cls = ["sortable"];
-  if (s && s.key === key) cls.push("sorted", s.dir);
-  return `<th class="${cls.join(" ")}" data-sort="${esc(key)}">${esc(label)}</th>`;
-}
-
-function wireHeaders(el) {
-  el.querySelectorAll("thead th.sortable").forEach(th => {
-    th.addEventListener("click", () => onHeaderClick(th.dataset.sort));
-  });
-}
-
 function badgeForStatus(s) {
-  if (s === "approved_for_check") return '<span class="badge ok">approved</span>';
-  if (s === "queued_for_review") return '<span class="badge warn">review</span>';
-  if (s === "archived_rhetoric") return '<span class="badge bad">rhetoric</span>';
-  return `<span class="badge">${esc(s)}</span>`;
+  if (s === "pending")   return '<span class="badge warn">pending</span>';
+  if (s === "verdicted") return '<span class="badge ok">verdicted</span>';
+  if (s === "failed")    return '<span class="badge bad">failed</span>';
+  return `<span class="badge">${esc(s || "—")}</span>`;
 }
 function badgeForVerdict(v) {
+  if (!v)                    return '<span class="badge muted">—</span>';
   if (v === "true")          return '<span class="badge ok">true</span>';
   if (v === "mostly_true")   return '<span class="badge ok">mostly true</span>';
   if (v === "mixed")         return '<span class="badge warn">mixed</span>';
@@ -510,12 +411,22 @@ async function loadAll() {
 
 // ---------------------------------------------------------------- render
 function renderStats() {
-  const s = $("#stats");
-  s.innerHTML = QUEUES.map(q => {
-    const n = state.data[q.id]?.length || 0;
-    const cls = q.id === "fact_check_queue" ? "accent" : "";
-    return `<div class="stat ${cls}"><div class="label">${q.label}</div><div class="value">${n}</div></div>`;
-  }).join("");
+  const claimsRaw = state.data.claims_raw || [];
+  const sent = state.data.sent_to_verify || [];
+  const pending = sent.filter(r => (r.status || "") === "pending").length;
+  const verdicted = sent.filter(r => (r.status || "") === "verdicted").length;
+  const needsReview = sent.filter(r => r.requires_review === "TRUE").length;
+
+  const cards = [
+    { label: "Claims Raw",     value: claimsRaw.length, cls: "accent" },
+    { label: "Sent to Verify", value: sent.length,      cls: "" },
+    { label: "Pending verdict",value: pending,          cls: "" },
+    { label: "Verdicted",      value: verdicted,        cls: "" },
+    { label: "Needs review",   value: needsReview,      cls: "" },
+  ];
+  $("#stats").innerHTML = cards.map(c =>
+    `<div class="stat ${c.cls}"><div class="label">${c.label}</div><div class="value">${c.value}</div></div>`
+  ).join("");
 }
 
 function renderTabs() {
@@ -523,11 +434,7 @@ function renderTabs() {
     `<button class="tab ${q.id === state.active ? "active" : ""}" data-id="${q.id}">${q.label}</button>`
   ).join("");
   $$("#tabs .tab").forEach(t => t.addEventListener("click", () => {
-    state.active = t.dataset.id;
-    // Reset to the default sort for this tab type (newest-added first).
-    const kind = QUEUES.find(q => q.id === state.active).kind;
-    state.sort = { ...(DEFAULT_SORT[kind] || null) };
-    renderTabs(); render();
+    state.active = t.dataset.id; renderTabs(); render();
   }));
 }
 
@@ -549,45 +456,30 @@ function render() {
   const fp = $("#filterParty").value;
   const fs = $("#filterSource").value;
 
-  // Set a default sort for this tab if none is active yet.
-  if (!state.sort || !state.sort.key) {
-    state.sort = { ...(DEFAULT_SORT[q.kind] || null) };
-  }
-
   const filtered = rows.filter(r => {
     if (fp && (r.party || "") !== fp) return false;
     if (fs && (r.source_name || "") !== fs) return false;
     if (!search) return true;
-    const hay = [r.atomic_claim, r.claim_text, r.raw_statement, r.speaker, r.source_name]
+    const hay = [r.atomic_claim, r.claim_text, r.speaker, r.source_name, r.summary]
       .filter(Boolean).join(" ").toLowerCase();
     return hay.includes(search);
   });
 
-  const sorted = sortRows(filtered, state.sort);
-
   const listEl = $("#list");
-  if (!sorted.length) { listEl.innerHTML = `<div class="empty">No rows match your filters.</div>`; return; }
+  if (!filtered.length) { listEl.innerHTML = `<div class="empty">No rows match your filters.</div>`; return; }
 
-  if (q.kind === "verdict") return renderVerdicts(listEl, sorted);
-  if (q.kind === "inbox")   return renderInbox(listEl, sorted);
-  if (q.kind === "pending") return renderPending(listEl, sorted);
-  return renderQueue(listEl, sorted);
+  if (q.kind === "claims_raw")     return renderClaimsRaw(listEl, filtered);
+  if (q.kind === "sent_to_verify") return renderSentToVerify(listEl, filtered);
 }
 
-// The triage view. One row per pending claim, with three action buttons
-// inline on the right. Clicking a button calls /api/triage which moves the
-// row into the relevant destination CSV (fact_check / rhetoric / dropped)
-// and removes it from pending_claims.csv.
-function renderPending(el, rows) {
+// --- Claims Raw ---------------------------------------------------
+// Two buttons per row: send for verification, or dismiss.
+function renderClaimsRaw(el, rows) {
   el.innerHTML = `
     <table>
       <thead><tr>
-        ${headerCell("Claim", "atomic_claim")}
-        ${headerCell("Speaker", "speaker")}
-        ${headerCell("Source", "source_name")}
-        ${headerCell("Claim date", "publication_date")}
-        ${headerCell("Added", "fetched_at")}
-        <th style="width:260px; text-align:right">Decide</th>
+        <th>Claim</th><th>Speaker</th><th>Source</th>
+        <th>Claim date</th><th>Added</th><th>Actions</th>
       </tr></thead>
       <tbody>
         ${rows.map((r, i) => `
@@ -597,145 +489,48 @@ function renderPending(el, rows) {
             <td>${r.source_url ? `<a href="${esc(r.source_url)}" target="_blank" rel="noopener">${esc(r.source_name || "link")}</a>` : esc(r.source_name || "")}</td>
             <td class="muted" style="white-space:nowrap">${esc(r.publication_date || "—")}</td>
             <td class="muted" style="white-space:nowrap">${esc(r.fetched_at || "—")}</td>
-            <td style="text-align:right; white-space:nowrap">
-              <button class="btn triage tri-fact"     data-i="${i}" data-decision="fact_check" title="Approve this for automated fact-checking">✓ Fact-check</button>
-              <button class="btn triage tri-rhetoric" data-i="${i}" data-decision="rhetoric"   title="Keep as rhetoric (no verdict)">⊘ Rhetoric</button>
-              <button class="btn triage tri-reject"   data-i="${i}" data-decision="reject"     title="Discard — bad extraction or off-topic">✗ Reject</button>
+            <td class="actions-cell">
+              <button class="btn small primary" data-act="verify" data-i="${i}">→ Send to Verify</button>
+              <button class="btn small danger"  data-act="dismiss" data-i="${i}">✗ Dismiss</button>
             </td>
           </tr>
         `).join("")}
       </tbody>
     </table>`;
-  wireHeaders(el);
-  // Row body click -> side panel (read-only detail view).
-  el.querySelectorAll("tbody tr").forEach(tr => {
-    tr.addEventListener("click", (ev) => {
-      if (ev.target.closest("button.triage") || ev.target.closest("a")) return;
-      openSide(rows[tr.dataset.i]);
-    });
-  });
-  // Triage buttons.
-  el.querySelectorAll("button.triage").forEach(b => {
-    b.addEventListener("click", (ev) => {
-      ev.stopPropagation();
-      const row = rows[Number(b.dataset.i)];
-      triageClaim(row, b.dataset.decision, b);
+  // Row click → detail side panel. Button clicks are handled separately
+  // and stop propagation so they don't also open the panel.
+  el.querySelectorAll("tbody tr").forEach(tr => tr.addEventListener("click", () => openSide(rows[tr.dataset.i])));
+  el.querySelectorAll("button[data-act]").forEach(btn => {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const i = parseInt(btn.dataset.i, 10);
+      const row = rows[i];
+      const act = btn.dataset.act;
+      await triageClaim(row, act);
     });
   });
 }
 
-async function triageClaim(row, decision, btnEl) {
-  const label = {
-    fact_check: "send to fact-check queue",
-    rhetoric:   "archive as rhetoric",
-    reject:     "reject and discard",
-  }[decision];
-  if (!row || !row.atomic_claim) return;
-  if (!confirm(`${label[0].toUpperCase()+label.slice(1)}?\n\n"${(row.atomic_claim || "").slice(0, 220)}"`)) return;
-
-  // Disable all triage buttons on this row while the request is in flight.
-  const rowButtons = btnEl.closest("tr")?.querySelectorAll("button.triage") || [btnEl];
-  rowButtons.forEach(b => b.disabled = true);
-  try {
-    await api("/api/triage", {
-      method: "POST",
-      body: JSON.stringify({
-        atomic_claim: row.atomic_claim,
-        source_url:   row.source_url || "",
-        decision,
-      }),
-    });
-    toast({
-      fact_check: "Sent to fact-check queue.",
-      rhetoric:   "Archived as rhetoric.",
-      reject:     "Claim discarded.",
-    }[decision], "ok");
-    await loadAll();
-  } catch (e) {
-    rowButtons.forEach(b => b.disabled = false);
-    toast("Triage failed: " + e.message, "err");
-  }
-}
-
-function renderQueue(el, rows) {
+// --- Sent to Verify ----------------------------------------------
+// Read-only table showing status + verdict (if the model has run).
+function renderSentToVerify(el, rows) {
   el.innerHTML = `
     <table>
       <thead><tr>
-        ${headerCell("Claim", "atomic_claim")}
-        ${headerCell("Speaker", "speaker")}
-        ${headerCell("Source", "source_name")}
-        ${headerCell("Type", "claim_type")}
-        ${headerCell("Status", "status")}
-        ${headerCell("Score", "fact_checkability_score")}
-        ${headerCell("Claim date", "publication_date")}
-        ${headerCell("Added to CSV", "fetched_at")}
+        <th>Claim</th><th>Speaker</th><th>Status</th>
+        <th>Verdict</th><th>Confidence</th><th>Review?</th>
+        <th>Sent</th><th>Checked</th>
       </tr></thead>
       <tbody>
         ${rows.map((r, i) => `
           <tr data-i="${i}">
-            <td>${esc((r.atomic_claim || r.claim_text || "").slice(0, 140))}</td>
+            <td>${esc((r.atomic_claim || "").slice(0, 160))}</td>
             <td>${esc(r.speaker || "")} <span class="muted">${esc(r.party || "")}</span></td>
-            <td>${r.source_url ? `<a href="${esc(r.source_url)}" target="_blank" rel="noopener">${esc(r.source_name || "link")}</a>` : esc(r.source_name || "")}</td>
-            <td>${esc(r.claim_type || "")}</td>
             <td>${badgeForStatus(r.status)}</td>
-            <td class="score">${esc(r.fact_checkability_score || "")}</td>
-            <td class="muted" style="white-space:nowrap">${esc(r.publication_date || "—")}</td>
-            <td class="muted" style="white-space:nowrap">${esc(r.fetched_at || "—")}</td>
-          </tr>
-        `).join("")}
-      </tbody>
-    </table>`;
-  wireHeaders(el);
-  el.querySelectorAll("tbody tr").forEach(tr => tr.addEventListener("click", () => openSide(rows[tr.dataset.i])));
-}
-
-function renderInbox(el, rows) {
-  el.innerHTML = `
-    <table>
-      <thead><tr>
-        ${headerCell("Raw statement", "raw_statement")}
-        ${headerCell("Source", "source_name")}
-        ${headerCell("Claim date", "publication_date")}
-        ${headerCell("Added to CSV", "fetched_at")}
-        ${headerCell("Processed", "processed")}
-      </tr></thead>
-      <tbody>
-        ${rows.map((r, i) => `
-          <tr data-i="${i}">
-            <td>${esc((r.raw_statement || "").slice(0, 200))}…</td>
-            <td>${r.source_url ? `<a href="${esc(r.source_url)}" target="_blank" rel="noopener">${esc(r.source_name || "link")}</a>` : esc(r.source_name || "")}</td>
-            <td class="muted" style="white-space:nowrap">${esc(r.publication_date || "—")}</td>
-            <td class="muted" style="white-space:nowrap">${esc(r.fetched_at || "—")}</td>
-            <td>${r.processed === "done" ? '<span class="badge ok">done</span>' : '<span class="badge warn">pending</span>'}</td>
-          </tr>
-        `).join("")}
-      </tbody>
-    </table>`;
-  wireHeaders(el);
-  el.querySelectorAll("tbody tr").forEach(tr => tr.addEventListener("click", () => openSide(rows[tr.dataset.i])));
-}
-
-function renderVerdicts(el, rows) {
-  el.innerHTML = `
-    <table>
-      <thead><tr>
-        ${headerCell("Claim", "atomic_claim")}
-        ${headerCell("Speaker", "speaker")}
-        ${headerCell("Verdict", "verdict")}
-        ${headerCell("Confidence", "confidence")}
-        ${headerCell("Review?", "requires_review")}
-        ${headerCell("Claim date", "publication_date")}
-        ${headerCell("Checked at", "checked_at")}
-      </tr></thead>
-      <tbody>
-        ${rows.map((r, i) => `
-          <tr data-i="${i}">
-            <td>${esc((r.atomic_claim || "").slice(0, 140))}</td>
-            <td>${esc(r.speaker || "")} <span class="muted">${esc(r.party || "")}</span></td>
             <td>${badgeForVerdict(r.verdict)}</td>
             <td class="score">${esc(r.confidence || "")}</td>
             <td>${r.requires_review === "TRUE" ? '<span class="badge warn">pending review</span>' : '<span class="badge ok">cleared</span>'}</td>
-            <td class="muted" style="white-space:nowrap">${esc(r.publication_date || "—")}</td>
+            <td class="muted" style="white-space:nowrap">${esc(r.sent_for_verification_at || "—")}</td>
             <td class="muted" style="white-space:nowrap">${esc(r.checked_at || "—")}</td>
           </tr>
         `).join("")}
@@ -745,6 +540,38 @@ function renderVerdicts(el, rows) {
 }
 
 ["#search", "#filterParty", "#filterSource"].forEach(s => $(s).addEventListener("input", render));
+
+// ---------------------------------------------------------------- triage
+// Calls POST /api/triage with decision=verify or decision=dismiss.
+// The server moves / deletes the row and returns the remaining count.
+async function triageClaim(row, decision) {
+  const preview = (row.atomic_claim || "").slice(0, 160);
+  const msg = decision === "verify"
+    ? `Send this claim for verification?\n\n"${preview}"`
+    : `Dismiss this claim (delete from Claims Raw)?\n\n"${preview}"`;
+  if (!confirm(msg)) return;
+
+  let note = "";
+  if (decision === "verify") {
+    note = prompt("Optional editor note (stashed in summary until the model runs):", "") || "";
+  }
+
+  try {
+    await api("/api/triage", {
+      method: "POST",
+      body: JSON.stringify({
+        atomic_claim: row.atomic_claim,
+        source_url: row.source_url,
+        decision,
+        note,
+      }),
+    });
+    toast(decision === "verify" ? "Sent for verification." : "Dismissed.", "ok");
+    await loadAll();
+  } catch (e) {
+    toast("Action failed: " + e.message, "err");
+  }
+}
 
 // ---------------------------------------------------------------- side panel
 function openSide(row) {
@@ -765,36 +592,29 @@ function openSide(row) {
   }).join("");
 
   const actions = $("#sideActions");
-  let btns = "";
-  if (q.id === "fact_check_queue") {
-    btns += `<button class="btn danger" id="btnBlock">🚫 Block (move to rhetoric)</button>`;
-  }
-  actions.innerHTML = btns;
-  if (q.id === "fact_check_queue") {
-    $("#btnBlock").addEventListener("click", blockSelected);
+  // Claims Raw rows get the same two triage buttons in the side panel
+  // so you can act without closing and re-opening the row.
+  if (q.id === "claims_raw") {
+    actions.innerHTML = `
+      <button class="btn primary" id="btnSideVerify">→ Send to Verify</button>
+      <button class="btn danger"  id="btnSideDismiss">✗ Dismiss</button>
+    `;
+    $("#btnSideVerify").addEventListener("click", async () => {
+      await triageClaim(row, "verify");
+      $("#sidePanel").classList.remove("open");
+    });
+    $("#btnSideDismiss").addEventListener("click", async () => {
+      await triageClaim(row, "dismiss");
+      $("#sidePanel").classList.remove("open");
+    });
+  } else {
+    // Sent to Verify is read-only for now — the pipeline owns these rows.
+    actions.innerHTML = `<span class="muted" style="padding:8px 0">Read-only. Verdict is written by the pipeline.</span>`;
   }
 
   $("#sidePanel").classList.add("open");
 }
 $("#btnCloseSide").addEventListener("click", () => $("#sidePanel").classList.remove("open"));
-
-// ---------------------------------------------------------------- block action
-async function blockSelected() {
-  const row = state.selected;
-  if (!row) return;
-  if (!confirm(`Block this claim from being fact-checked?\n\n"${(row.atomic_claim || "").slice(0, 200)}"`)) return;
-  try {
-    await api("/api/block", {
-      method: "POST",
-      body: JSON.stringify({ atomic_claim: row.atomic_claim, source_url: row.source_url })
-    });
-    toast("Claim blocked — moved to rhetoric archive.", "ok");
-    $("#sidePanel").classList.remove("open");
-    await loadAll();
-  } catch (e) {
-    toast("Block failed: " + e.message, "err");
-  }
-}
 
 // ---------------------------------------------------------------- add claim
 $("#btnAdd").addEventListener("click", () => $("#modalBg").classList.add("open"));
@@ -802,40 +622,27 @@ $("#btnCloseModal").addEventListener("click", () => $("#modalBg").classList.remo
 $("#btnCancelAdd").addEventListener("click", () => $("#modalBg").classList.remove("open"));
 
 $("#btnSubmitAdd").addEventListener("click", async () => {
-  const queue = $("#f_queue").value;
   const atomic = $("#f_atomic").value.trim();
   if (!atomic) { toast("Atomic claim is required", "err"); return; }
 
+  // Row shape matches CLAIMS_COLS in src/spunt/schema.py exactly.
   const row = {
-    claim_text: $("#f_claim_text").value.trim() || atomic,
-    atomic_claim: atomic,
-    speaker: $("#f_speaker").value.trim() || "unknown",
-    role: $("#f_role").value.trim() || "",
-    party: $("#f_party").value.trim() || "unknown",
-    source_name: $("#f_source_name").value.trim() || "manual",
-    source_url: $("#f_source_url").value.trim() || "",
+    claim_text:       $("#f_claim_text").value.trim() || atomic,
+    atomic_claim:     atomic,
+    speaker:          $("#f_speaker").value.trim() || "unknown",
+    role:             $("#f_role").value.trim() || "",
+    party:            $("#f_party").value.trim() || "unknown",
+    source_name:      $("#f_source_name").value.trim() || "manual",
+    source_url:       $("#f_source_url").value.trim() || "",
     publication_date: $("#f_publication_date").value || "unknown",
-    claim_type: $("#f_claim_type").value,
-    verifiability_status: queue === "fact_check_queue" ? "checkable" :
-                          queue === "review_queue" ? "partially_checkable" : "not_checkable",
-    fact_checkability_score: parseInt($("#f_score").value, 10) || 1,
-    evidence_target: $("#f_evidence_target").value.trim() || "",
-    numeric_flag: /[€$]|\d+(?:\.\d+)?\s*%|\b\d{3,}\b/.test(atomic) ? "TRUE" : "FALSE",
-    legal_flag:   /\b(law|legal notice|bill|regulation|act|constitution)\b/i.test(atomic) ? "TRUE" : "FALSE",
-    comparison_flag: /\b(more than|less than|vs|compared|versus|double|triple|half)\b/i.test(atomic) ? "TRUE" : "FALSE",
-    timeframe_present: /\b(19|20)\d{2}\b|\b\d+\s*(year|month|week|day)s?\b/i.test(atomic) ? "TRUE" : "FALSE",
-    needs_human_review: queue === "review_queue" ? "TRUE" : "FALSE",
-    rejection_reason: queue === "rhetoric_archive" ? "editor_added" : "",
-    status: queue === "fact_check_queue" ? "approved_for_check" :
-            queue === "review_queue"     ? "queued_for_review"  :
-                                           "archived_rhetoric",
   };
 
   try {
-    await api("/api/claim", { method: "POST", body: JSON.stringify({ queue, row }) });
-    toast("Claim added.", "ok");
+    await api("/api/claim", { method: "POST", body: JSON.stringify({ row }) });
+    toast("Claim added to Claims Raw.", "ok");
     $("#modalBg").classList.remove("open");
-    ["f_atomic","f_claim_text","f_speaker","f_role","f_source_name","f_source_url","f_publication_date","f_evidence_target"].forEach(id => $("#"+id).value = "");
+    ["f_atomic","f_claim_text","f_speaker","f_role","f_source_name","f_source_url","f_publication_date"]
+      .forEach(id => $("#"+id).value = "");
     await loadAll();
   } catch (e) {
     toast("Add failed: " + e.message, "err");
@@ -843,37 +650,18 @@ $("#btnSubmitAdd").addEventListener("click", async () => {
 });
 
 // ---------------------------------------------------------------- run pipeline
-// Two separate triggers:
-//   • Fetch new claims → runs the cheap "ingest" stages (collect + extract + analyse)
-//   • Run verdicts     → runs only the expensive "verdict" stage
-// Scheduled auto-runs at 8am/8pm Malta time also do "ingest".
-async function triggerStage(stage, btnId, confirmMsg, okMsg) {
-  if (!confirm(confirmMsg)) return;
-  const btn = $("#" + btnId);
-  btn.disabled = true;
+$("#btnRun").addEventListener("click", async () => {
+  if (!confirm("Run the pipeline now? This will cost API credits.")) return;
+  $("#btnRun").disabled = true;
   try {
-    await api("/api/trigger", { method: "POST", body: JSON.stringify({ stage }) });
-    toast(okMsg, "ok");
+    await api("/api/trigger", { method: "POST", body: JSON.stringify({ stage: "all" }) });
+    toast("Pipeline triggered — new commit will appear in ~5–15 min.", "ok");
   } catch (e) {
     toast("Trigger failed: " + e.message, "err");
   } finally {
-    setTimeout(() => { btn.disabled = false; }, 5000);
+    setTimeout(() => { $("#btnRun").disabled = false; }, 5000);
   }
-}
-
-$("#btnIngest").addEventListener("click", () => triggerStage(
-  "ingest",
-  "btnIngest",
-  "Fetch new claims now? This pulls news, extracts claims, and sorts them. No verdicts. Cheap and fast.",
-  "Ingest triggered — new claims will appear in ~2–5 min."
-));
-
-$("#btnVerdict").addEventListener("click", () => triggerStage(
-  "verdict",
-  "btnVerdict",
-  "Run automated verdicts now? This is slow (~5 min) and uses API credits. Proceed?",
-  "Verdicts triggered — results will appear in ~5–15 min."
-));
+});
 
 $("#btnRefresh").addEventListener("click", loadAll);
 </script>
