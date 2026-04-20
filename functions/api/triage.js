@@ -1,62 +1,40 @@
-// POST /api/triage — editor triage for a pending claim.
+// POST /api/triage — editor decides what to do with a pending claim.
 //
 // Body: {
-//   atomic_claim: "<text>",          // used to locate the pending row
-//   source_url:   "<url>",           // disambiguates when the same claim
-//                                    // is made by multiple people/articles
-//   decision:     "fact_check" | "rhetoric" | "reject",
-//   note:         "<optional free-text editor note>"
+//   atomic_claim: "<text>",           // locates the row in claims_raw.csv
+//   source_url:   "<url>",            // optional, disambiguates duplicates
+//   decision:     "verify" | "dismiss",
+//   note:         "<optional editor note — kept in the summary column>"
 // }
 //
 // Effect per decision:
-//   fact_check → append a QUEUE-shaped row to fact_check_queue.csv with
-//                status="approved_for_check", then drop the source row
-//                from pending_claims.csv. Downstream verdict.py will now
-//                pick it up on the next "Run verdicts" click.
-//   rhetoric   → append to rhetoric_archive.csv with
-//                status="archived_rhetoric", drop from pending.
-//   reject     → simply drop from pending (not kept anywhere; if an editor
-//                changes their mind they can re-fetch from inbox).
+//   verify  → append a full verification row to sent_to_verify.csv with
+//             status="pending". Downstream `verdict` will pick it up.
+//             The row is removed from claims_raw.csv.
+//   dismiss → just remove the row from claims_raw.csv. Nothing kept.
 //
-// The two CSV writes happen in sequence: append to the destination first,
-// then remove from pending. If the destination append fails we bail before
-// touching pending, so a row is never "lost between files".
+// The two CSV writes run in sequence: destination first, then source. If
+// the destination write fails we abort before touching claims_raw.csv so
+// a row is never "lost between files".
 import {
   json, requireEnv, ghGetFile, ghPutFile, parseCSV, serializeCSV,
 } from "../_shared.js";
 
-const PENDING_PATH = "data/pending_claims.csv";
-const PENDING_HEADERS = [
+const CLAIMS_PATH = "data/claims_raw.csv";
+const VERIFICATION_PATH = "data/sent_to_verify.csv";
+
+// Must match src/spunt/schema.py CLAIMS_COLS.
+const CLAIMS_HEADERS = [
   "claim_text", "atomic_claim", "speaker", "role", "party",
   "source_name", "source_url", "publication_date", "fetched_at",
 ];
 
-// Must match src/spunt/schema.py QUEUE_COLS.
-const QUEUE_HEADERS = [
-  "claim_text", "atomic_claim", "speaker", "role", "party",
-  "source_name", "source_url", "publication_date", "fetched_at",
-  "claim_type", "verifiability_status", "fact_checkability_score",
-  "evidence_target", "numeric_flag", "legal_flag", "comparison_flag",
-  "timeframe_present", "needs_human_review", "rejection_reason", "status",
+// Must match src/spunt/schema.py VERIFICATION_COLS.
+const VERIFICATION_HEADERS = [
+  ...CLAIMS_HEADERS,
+  "sent_for_verification_at", "status", "verdict", "confidence",
+  "summary", "evidence", "requires_review", "checked_at", "model",
 ];
-
-const DECISIONS = {
-  fact_check: {
-    target: "data/fact_check_queue.csv",
-    status: "approved_for_check",
-    msg: "admin: promote claim to fact-check queue",
-  },
-  rhetoric: {
-    target: "data/rhetoric_archive.csv",
-    status: "archived_rhetoric",
-    msg: "admin: archive claim as rhetoric",
-  },
-  reject: {
-    target: null,  // no destination file; drop only
-    status: null,
-    msg: "admin: reject claim from pending",
-  },
-};
 
 function utcStamp() {
   const d = new Date();
@@ -65,24 +43,18 @@ function utcStamp() {
          `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())} UTC`;
 }
 
-// Build a QUEUE-shaped row from a pending-claims row + editor decision.
-// Fields the analyser would have filled in (claim_type, scores, flags, etc.)
-// are left blank — a human editor has already made the triage decision, so
-// we don't need the model's classification metadata.
-function toQueueRow(pending, status, note) {
-  const base = {};
-  for (const h of QUEUE_HEADERS) base[h] = pending[h] ?? "";
-  base.status = status;
-  base.needs_human_review = "FALSE";
-  base.numeric_flag = "FALSE";
-  base.legal_flag = "FALSE";
-  base.comparison_flag = "FALSE";
-  base.timeframe_present = "FALSE";
-  base.fact_checkability_score = "";
-  // If the editor left a note, stash it in rejection_reason (the only
-  // free-text column available across queues without schema changes).
-  if (note) base.rejection_reason = String(note).slice(0, 500);
-  return base;
+function buildVerificationRow(claimRow, note) {
+  const out = {};
+  for (const h of VERIFICATION_HEADERS) out[h] = "";
+  for (const h of CLAIMS_HEADERS) out[h] = claimRow[h] ?? "";
+  out.sent_for_verification_at = utcStamp();
+  out.status = "pending";
+  out.requires_review = "FALSE";
+  // Editor note, if provided, is stashed in the summary column until the
+  // verdict runs and overwrites it. This preserves any context the editor
+  // wanted attached to the claim.
+  if (note) out.summary = String(note).slice(0, 800);
+  return out;
 }
 
 export const onRequestPost = async ({ request, env }) => {
@@ -92,56 +64,60 @@ export const onRequestPost = async ({ request, env }) => {
     const { atomic_claim, source_url, decision, note } = body;
 
     if (!atomic_claim) return json({ error: "atomic_claim required" }, 400);
-    if (!DECISIONS[decision]) return json({ error: "invalid decision" }, 400);
-
-    // 1. Load pending and locate the row.
-    const pend = await ghGetFile(env, PENDING_PATH);
-    if (pend.notFound) return json({ error: "pending_claims.csv not found" }, 404);
-    const parsed = parseCSV(pend.text);
-    const headers = parsed.headers.length ? parsed.headers : PENDING_HEADERS;
-    const rows = parsed.rows;
-
-    const idx = rows.findIndex(r =>
-      (r.atomic_claim || "") === atomic_claim &&
-      // source_url is optional — only use it to disambiguate if provided.
-      (!source_url || (r.source_url || "") === source_url)
-    );
-    if (idx < 0) return json({ error: "claim not found in pending" }, 404);
-    const claimRow = rows[idx];
-
-    // 2. Write to the destination (unless reject).
-    const dec = DECISIONS[decision];
-    if (dec.target) {
-      const dest = await ghGetFile(env, dec.target);
-      let destHeaders = QUEUE_HEADERS;
-      let destRows = [];
-      let destSha;
-      if (!dest.notFound) {
-        const p = parseCSV(dest.text);
-        destHeaders = p.headers.length ? p.headers : QUEUE_HEADERS;
-        destRows = p.rows;
-        destSha = dest.sha;
-      }
-      const newRow = toQueueRow(claimRow, dec.status, note);
-      // Use the destination's actual header order when serializing.
-      const aligned = {};
-      for (const h of destHeaders) aligned[h] = newRow[h] ?? "";
-      destRows.push(aligned);
-      const destText = serializeCSV(destHeaders, destRows);
-      await ghPutFile(env, dec.target, destText, destSha, dec.msg);
+    if (!["verify", "dismiss"].includes(decision)) {
+      return json({ error: "decision must be 'verify' or 'dismiss'" }, 400);
     }
 
-    // 3. Drop the claim from pending and save.
-    rows.splice(idx, 1);
-    const pendText = serializeCSV(headers, rows);
-    await ghPutFile(env, PENDING_PATH, pendText, pend.sha,
-                    `admin: remove triaged claim from pending (${decision})`);
+    // 1. Load claims_raw.csv and locate the row.
+    const src = await ghGetFile(env, CLAIMS_PATH);
+    if (src.notFound) {
+      return json({ error: "claims_raw.csv not found" }, 404);
+    }
+    const parsed = parseCSV(src.text);
+    const srcHeaders = parsed.headers.length ? parsed.headers : CLAIMS_HEADERS;
+    const srcRows = parsed.rows;
+
+    const idx = srcRows.findIndex(r =>
+      (r.atomic_claim || "") === atomic_claim &&
+      (!source_url || (r.source_url || "") === source_url)
+    );
+    if (idx < 0) return json({ error: "claim not found in claims_raw.csv" }, 404);
+    const claimRow = srcRows[idx];
+
+    // 2. If verifying, append to sent_to_verify.csv first.
+    if (decision === "verify") {
+      const dst = await ghGetFile(env, VERIFICATION_PATH);
+      let dstHeaders = VERIFICATION_HEADERS;
+      let dstRows = [];
+      let dstSha;
+      if (!dst.notFound) {
+        const p = parseCSV(dst.text);
+        dstHeaders = p.headers.length ? p.headers : VERIFICATION_HEADERS;
+        dstRows = p.rows;
+        dstSha = dst.sha;
+      }
+      const newRow = buildVerificationRow(claimRow, note);
+      // Respect whatever header order the live file already uses.
+      const aligned = {};
+      for (const h of dstHeaders) aligned[h] = newRow[h] ?? "";
+      dstRows.push(aligned);
+      const dstText = serializeCSV(dstHeaders, dstRows);
+      await ghPutFile(env, VERIFICATION_PATH, dstText, dstSha,
+                      "admin: send claim for verification");
+    }
+
+    // 3. Remove the row from claims_raw.csv and save.
+    srcRows.splice(idx, 1);
+    const srcText = serializeCSV(srcHeaders, srcRows);
+    const msg = decision === "verify"
+      ? "admin: remove verified claim from claims_raw.csv"
+      : "admin: dismiss claim from claims_raw.csv";
+    await ghPutFile(env, CLAIMS_PATH, srcText, src.sha, msg);
 
     return json({
       ok: true,
       decision,
-      target: dec.target,
-      pending_remaining: rows.length,
+      claims_remaining: srcRows.length,
       stamped_at: utcStamp(),
     });
   } catch (e) {
