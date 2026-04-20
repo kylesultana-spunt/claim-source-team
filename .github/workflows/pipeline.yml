@@ -1,10 +1,11 @@
 name: spunt-pipeline
 
 on:
-  # Every 4 hours during the election cycle
-  schedule:
-    - cron: "0 */4 * * *"
-  # Manual runs from the GitHub UI (Actions → Run workflow)
+  # Auto-schedule disabled for now to keep API costs under control.
+  # Uncomment the two lines below to run automatically every 12 hours.
+  # schedule:
+  #   - cron: "0 */12 * * *"
+  # Manual runs from the GitHub UI (Actions → Run workflow) or from admin.html
   workflow_dispatch:
     inputs:
       stage:
@@ -52,7 +53,7 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           SPUNT_MODEL_BULK:      ${{ vars.SPUNT_MODEL_BULK      || 'claude-haiku-4-5-20251001' }}
           SPUNT_MODEL_REASONING: ${{ vars.SPUNT_MODEL_REASONING || 'claude-sonnet-4-6' }}
-          SPUNT_MODEL_VERDICT:   ${{ vars.SPUNT_MODEL_VERDICT   || 'claude-opus-4-6' }}
+          SPUNT_MODEL_VERDICT:   ${{ vars.SPUNT_MODEL_VERDICT   || 'claude-sonnet-4-6' }}
         run: |
           STAGE="${{ github.event.inputs.stage || 'all' }}"
           python -m spunt "$STAGE" --root . -v
