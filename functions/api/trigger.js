@@ -7,8 +7,8 @@ export const onRequestPost = async ({ request, env }) => {
   try {
     requireEnv(env);
     const body = await request.json().catch(() => ({}));
-    const stage = body.stage || "all";
-    if (!["collect", "extract", "analyse", "verdict", "all"].includes(stage)) {
+    const stage = body.stage || "ingest";
+    if (!["collect", "extract", "analyse", "verdict", "ingest", "all"].includes(stage)) {
       return json({ error: "invalid stage" }, 400);
     }
 
