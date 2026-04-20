@@ -1,9 +1,0 @@
-anthropic>=0.39.0
-feedparser>=6.0.11
-httpx>=0.27.0
-selectolax>=0.3.21
-trafilatura>=1.12.0
-python-dateutil>=2.9.0
-pyyaml>=6.0.2
-rapidfuzz>=3.9.0
-tenacity>=9.0.0
