@@ -478,6 +478,7 @@ function renderQueue(el, rows) {
       <thead><tr>
         <th>Claim</th><th>Speaker</th><th>Source</th>
         <th>Type</th><th>Status</th><th class="score">Score</th>
+        <th>Claim date</th><th>Added to CSV</th>
       </tr></thead>
       <tbody>
         ${rows.map((r, i) => `
@@ -488,6 +489,8 @@ function renderQueue(el, rows) {
             <td>${esc(r.claim_type || "")}</td>
             <td>${badgeForStatus(r.status)}</td>
             <td class="score">${esc(r.fact_checkability_score || "")}</td>
+            <td class="muted" style="white-space:nowrap">${esc(r.publication_date || "—")}</td>
+            <td class="muted" style="white-space:nowrap">${esc(r.fetched_at || "—")}</td>
           </tr>
         `).join("")}
       </tbody>
@@ -499,14 +502,16 @@ function renderInbox(el, rows) {
   el.innerHTML = `
     <table>
       <thead><tr>
-        <th>Raw statement</th><th>Source</th><th>Date</th><th>Processed</th>
+        <th>Raw statement</th><th>Source</th>
+        <th>Claim date</th><th>Added to CSV</th><th>Processed</th>
       </tr></thead>
       <tbody>
         ${rows.map((r, i) => `
           <tr data-i="${i}">
             <td>${esc((r.raw_statement || "").slice(0, 200))}…</td>
             <td>${r.source_url ? `<a href="${esc(r.source_url)}" target="_blank" rel="noopener">${esc(r.source_name || "link")}</a>` : esc(r.source_name || "")}</td>
-            <td>${esc(r.publication_date || "")}</td>
+            <td class="muted" style="white-space:nowrap">${esc(r.publication_date || "—")}</td>
+            <td class="muted" style="white-space:nowrap">${esc(r.fetched_at || "—")}</td>
             <td>${r.processed === "done" ? '<span class="badge ok">done</span>' : '<span class="badge warn">pending</span>'}</td>
           </tr>
         `).join("")}
@@ -519,7 +524,9 @@ function renderVerdicts(el, rows) {
   el.innerHTML = `
     <table>
       <thead><tr>
-        <th>Claim</th><th>Speaker</th><th>Verdict</th><th>Confidence</th><th>Review?</th>
+        <th>Claim</th><th>Speaker</th><th>Verdict</th>
+        <th>Confidence</th><th>Review?</th>
+        <th>Claim date</th><th>Checked at</th>
       </tr></thead>
       <tbody>
         ${rows.map((r, i) => `
@@ -529,6 +536,8 @@ function renderVerdicts(el, rows) {
             <td>${badgeForVerdict(r.verdict)}</td>
             <td class="score">${esc(r.confidence || "")}</td>
             <td>${r.requires_review === "TRUE" ? '<span class="badge warn">pending review</span>' : '<span class="badge ok">cleared</span>'}</td>
+            <td class="muted" style="white-space:nowrap">${esc(r.publication_date || "—")}</td>
+            <td class="muted" style="white-space:nowrap">${esc(r.checked_at || "—")}</td>
           </tr>
         `).join("")}
       </tbody>
