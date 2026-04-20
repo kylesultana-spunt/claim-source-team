@@ -1,37 +1,32 @@
 """Claim extractor.
 
 For each inbox row where processed == "" (pending), call the LLM with
-config/prompts/extract.md and write atomic claims to an **intermediate**
-list. The analyser (next step) decides which queue each claim belongs to.
+config/prompts/extract.md and append atomic claims to claims_raw.csv.
 
-Dedup happens in TWO places:
+Dedup happens in two places:
     - Before LLM call: skip inbox rows whose URL is already fully processed.
     - After LLM call: skip claims that are fuzz-duplicate with anything
-      already in inbox/review_queue/fact_check_queue/rhetoric_archive.
+      already in claims_raw.csv OR sent_to_verify.csv. This stops the
+      same claim being extracted twice when the same story runs in two
+      outlets.
 
-The extractor writes a temporary `pending_claims.csv` that the analyser
-consumes. This separation means an LLM failure on the extract step
-doesn't leave partial rows in the queues.
+claims_raw.csv is the single source of truth for new extracted claims —
+an editor triages each row in the admin portal (select & send to verify,
+or dismiss). Verdict generation reads sent_to_verify.csv, not this file.
 """
 from __future__ import annotations
 
-import json
 import logging
 from pathlib import Path
-from typing import Dict, Iterable, List
+from typing import Dict, List
 
 from .dedup import is_near_duplicate
 from .collector import load_sources
 from .llm import MODEL_REASONING, chat_json
-from .schema import INBOX_COLS, utc_stamp
+from .schema import CLAIMS_COLS, INBOX_COLS, utc_stamp
 from .storage import read_csv, write_csv_atomic
 
 log = logging.getLogger("spunt.extractor")
-
-PENDING_COLS = [
-    "claim_text", "atomic_claim", "speaker", "role", "party",
-    "source_name", "source_url", "publication_date", "fetched_at",
-]
 
 
 def _politicians_table(politicians: List[Dict]) -> str:
@@ -47,33 +42,36 @@ def _load_prompt(path: Path, politicians: List[Dict]) -> str:
     return raw.replace("{politicians_table}", _politicians_table(politicians))
 
 
-def _collect_existing_claims(data_dir: Path) -> List[str]:
-    """All claim text already in any queue, for near-dupe comparison."""
+def _already_known_claims(data_dir: Path) -> List[str]:
+    """Every atomic_claim currently in claims_raw.csv or sent_to_verify.csv.
+
+    Used by the fuzzy duplicate filter so we don't extract the same claim
+    twice when the same story breaks in two outlets.
+    """
     existing: List[str] = []
-    for f in ("fact_check_queue.csv", "review_queue.csv", "rhetoric_archive.csv"):
-        p = data_dir / f
-        for row in read_csv(p):
+    for fname in ("claims_raw.csv", "sent_to_verify.csv"):
+        for row in read_csv(data_dir / fname):
             claim = row.get("atomic_claim") or row.get("claim_text")
             if claim:
                 existing.append(claim)
     return existing
 
 
-def run(inbox_path: Path, sources_path: Path, pending_path: Path,
+def run(inbox_path: Path, sources_path: Path, claims_path: Path,
         data_dir: Path, prompts_dir: Path) -> int:
     """Extract atomic claims from all pending inbox rows.
 
-    Returns number of new atomic claims appended to pending_claims.csv.
+    Returns the number of new atomic claims appended to claims_raw.csv.
     """
     _, politicians = load_sources(sources_path)
     system_prompt = _load_prompt(prompts_dir / "extract.md", politicians)
 
     inbox_rows = read_csv(inbox_path)
-    existing_claims = _collect_existing_claims(data_dir)
-    pending_existing = read_csv(pending_path)
-    pending_claims = [r["atomic_claim"] for r in pending_existing if r.get("atomic_claim")]
+    existing_claims = _already_known_claims(data_dir)
+    existing_rows = read_csv(claims_path)
+    seen_in_batch = [r["atomic_claim"] for r in existing_rows if r.get("atomic_claim")]
 
-    new_pending: List[Dict] = []
+    new_claims: List[Dict] = []
     dirty_inbox = False
 
     for row in inbox_rows:
@@ -100,13 +98,12 @@ def run(inbox_path: Path, sources_path: Path, pending_path: Path,
             atomic = (claim.get("atomic_claim") or "").strip()
             if not atomic:
                 continue
-            # Near-dup against already-stored queues AND this pending batch
             if is_near_duplicate(atomic, existing_claims):
                 continue
-            if is_near_duplicate(atomic, pending_claims):
+            if is_near_duplicate(atomic, seen_in_batch):
                 continue
 
-            new_pending.append({
+            new_claims.append({
                 "claim_text": claim.get("claim_text") or atomic,
                 "atomic_claim": atomic,
                 "speaker": claim.get("speaker") or "unknown",
@@ -117,7 +114,7 @@ def run(inbox_path: Path, sources_path: Path, pending_path: Path,
                 "publication_date": row.get("publication_date", "unknown"),
                 "fetched_at": utc_stamp(),
             })
-            pending_claims.append(atomic)
+            seen_in_batch.append(atomic)
 
         row["processed"] = "done"
         dirty_inbox = True
@@ -125,10 +122,10 @@ def run(inbox_path: Path, sources_path: Path, pending_path: Path,
     if dirty_inbox:
         write_csv_atomic(inbox_path, INBOX_COLS, inbox_rows)
 
-    if new_pending:
-        write_csv_atomic(pending_path, PENDING_COLS,
-                         pending_existing + new_pending)
-    return len(new_pending)
+    if new_claims:
+        write_csv_atomic(claims_path, CLAIMS_COLS,
+                         existing_rows + new_claims)
+    return len(new_claims)
 
 
 if __name__ == "__main__":
@@ -138,8 +135,8 @@ if __name__ == "__main__":
     n = run(
         inbox_path=root / "data" / "inbox.csv",
         sources_path=root / "config" / "sources.yml",
-        pending_path=root / "data" / "pending_claims.csv",
+        claims_path=root / "data" / "claims_raw.csv",
         data_dir=root / "data",
         prompts_dir=root / "config" / "prompts",
     )
-    print(f"extractor: appended {n} new atomic claims")
+    print(f"extractor: appended {n} new atomic claims to claims_raw.csv")
