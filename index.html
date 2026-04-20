@@ -45,6 +45,16 @@
     .btn.danger:hover { background: #2a1c1f; }
     .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
+    /* Inline per-row triage buttons in the Claims tab. Smaller and tighter
+       than main-chrome buttons so three fit on one row without wrapping. */
+    .btn.triage { padding: 4px 9px; font-size: 12px; margin-left: 4px; }
+    .btn.triage.tri-fact     { color: var(--ok);   border-color: #1f3b2b; }
+    .btn.triage.tri-fact:hover     { background: #122018; }
+    .btn.triage.tri-rhetoric { color: var(--warn); border-color: #3b2f14; }
+    .btn.triage.tri-rhetoric:hover { background: #231c0d; }
+    .btn.triage.tri-reject   { color: var(--bad);  border-color: #3a2326; }
+    .btn.triage.tri-reject:hover   { background: #241517; }
+
     /* Login gate */
     .gate {
       position: fixed; inset: 0; background: var(--bg);
@@ -290,6 +300,10 @@
 <script>
 // ------------------------------------------------------------------- config
 const QUEUES = [
+  // "Claims" is the triage tab: every newly extracted claim lands here
+  // and the editor decides (per row) whether to fact-check it, archive it
+  // as rhetoric, or reject it outright. This is the default view.
+  { id: "pending_claims",   label: "Claims",        file: "/data/pending_claims.csv",   kind: "pending" },
   { id: "inbox",            label: "Inbox",         file: "/data/inbox.csv",            kind: "inbox" },
   { id: "fact_check_queue", label: "Fact check",    file: "/data/fact_check_queue.csv", kind: "queue" },
   { id: "review_queue",     label: "Review",        file: "/data/review_queue.csv",     kind: "queue" },
@@ -302,6 +316,7 @@ const PW_KEY = "spunt_admin_pw";
 // recently-collected claims are at the top, and you can instantly see
 // whether the last pipeline run added anything new.
 const DEFAULT_SORT = {
+  pending: { key: "fetched_at",  dir: "desc" },
   inbox:   { key: "fetched_at",  dir: "desc" },
   queue:   { key: "fetched_at",  dir: "desc" },
   verdict: { key: "checked_at",  dir: "desc" },
@@ -311,7 +326,9 @@ const DEFAULT_SORT = {
 // "2026-04-20 14:02 UTC".
 const NUMERIC_KEYS = new Set(["fact_checkability_score", "confidence"]);
 
-let state = { data: {}, active: "fact_check_queue", selected: null, sort: null };
+// "pending_claims" is the default tab — that's where the editor triages
+// newly-extracted claims into fact-check / rhetoric / reject.
+let state = { data: {}, active: "pending_claims", selected: null, sort: null };
 
 // ------------------------------------------------------------------- helpers
 const $ = (s) => document.querySelector(s);
@@ -553,7 +570,91 @@ function render() {
 
   if (q.kind === "verdict") return renderVerdicts(listEl, sorted);
   if (q.kind === "inbox")   return renderInbox(listEl, sorted);
+  if (q.kind === "pending") return renderPending(listEl, sorted);
   return renderQueue(listEl, sorted);
+}
+
+// The triage view. One row per pending claim, with three action buttons
+// inline on the right. Clicking a button calls /api/triage which moves the
+// row into the relevant destination CSV (fact_check / rhetoric / dropped)
+// and removes it from pending_claims.csv.
+function renderPending(el, rows) {
+  el.innerHTML = `
+    <table>
+      <thead><tr>
+        ${headerCell("Claim", "atomic_claim")}
+        ${headerCell("Speaker", "speaker")}
+        ${headerCell("Source", "source_name")}
+        ${headerCell("Claim date", "publication_date")}
+        ${headerCell("Added", "fetched_at")}
+        <th style="width:260px; text-align:right">Decide</th>
+      </tr></thead>
+      <tbody>
+        ${rows.map((r, i) => `
+          <tr data-i="${i}">
+            <td>${esc((r.atomic_claim || r.claim_text || "").slice(0, 180))}</td>
+            <td>${esc(r.speaker || "")} <span class="muted">${esc(r.party || "")}</span></td>
+            <td>${r.source_url ? `<a href="${esc(r.source_url)}" target="_blank" rel="noopener">${esc(r.source_name || "link")}</a>` : esc(r.source_name || "")}</td>
+            <td class="muted" style="white-space:nowrap">${esc(r.publication_date || "—")}</td>
+            <td class="muted" style="white-space:nowrap">${esc(r.fetched_at || "—")}</td>
+            <td style="text-align:right; white-space:nowrap">
+              <button class="btn triage tri-fact"     data-i="${i}" data-decision="fact_check" title="Approve this for automated fact-checking">✓ Fact-check</button>
+              <button class="btn triage tri-rhetoric" data-i="${i}" data-decision="rhetoric"   title="Keep as rhetoric (no verdict)">⊘ Rhetoric</button>
+              <button class="btn triage tri-reject"   data-i="${i}" data-decision="reject"     title="Discard — bad extraction or off-topic">✗ Reject</button>
+            </td>
+          </tr>
+        `).join("")}
+      </tbody>
+    </table>`;
+  wireHeaders(el);
+  // Row body click -> side panel (read-only detail view).
+  el.querySelectorAll("tbody tr").forEach(tr => {
+    tr.addEventListener("click", (ev) => {
+      if (ev.target.closest("button.triage") || ev.target.closest("a")) return;
+      openSide(rows[tr.dataset.i]);
+    });
+  });
+  // Triage buttons.
+  el.querySelectorAll("button.triage").forEach(b => {
+    b.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      const row = rows[Number(b.dataset.i)];
+      triageClaim(row, b.dataset.decision, b);
+    });
+  });
+}
+
+async function triageClaim(row, decision, btnEl) {
+  const label = {
+    fact_check: "send to fact-check queue",
+    rhetoric:   "archive as rhetoric",
+    reject:     "reject and discard",
+  }[decision];
+  if (!row || !row.atomic_claim) return;
+  if (!confirm(`${label[0].toUpperCase()+label.slice(1)}?\n\n"${(row.atomic_claim || "").slice(0, 220)}"`)) return;
+
+  // Disable all triage buttons on this row while the request is in flight.
+  const rowButtons = btnEl.closest("tr")?.querySelectorAll("button.triage") || [btnEl];
+  rowButtons.forEach(b => b.disabled = true);
+  try {
+    await api("/api/triage", {
+      method: "POST",
+      body: JSON.stringify({
+        atomic_claim: row.atomic_claim,
+        source_url:   row.source_url || "",
+        decision,
+      }),
+    });
+    toast({
+      fact_check: "Sent to fact-check queue.",
+      rhetoric:   "Archived as rhetoric.",
+      reject:     "Claim discarded.",
+    }[decision], "ok");
+    await loadAll();
+  } catch (e) {
+    rowButtons.forEach(b => b.disabled = false);
+    toast("Triage failed: " + e.message, "err");
+  }
 }
 
 function renderQueue(el, rows) {
