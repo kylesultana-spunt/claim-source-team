@@ -183,7 +183,8 @@
     <span class="meta" id="lastRun">—</span>
     <button class="btn" id="btnRefresh" title="Reload data from CSV">↻ Reload</button>
     <button class="btn" id="btnAdd">+ Add claim</button>
-    <button class="btn primary" id="btnRun">▶ Run pipeline</button>
+    <button class="btn primary" id="btnRun" title="Collect new articles and extract claims into Claims Raw">▶ Fetch claims</button>
+    <button class="btn primary" id="btnVerify" title="Run the AI verdict on every pending row in Sent to Verify">▶ Verify claims</button>
     <button class="btn" id="btnLogout" title="Sign out">↪</button>
   </div>
 </header>
@@ -651,15 +652,45 @@ $("#btnSubmitAdd").addEventListener("click", async () => {
 
 // ---------------------------------------------------------------- run pipeline
 $("#btnRun").addEventListener("click", async () => {
-  if (!confirm("Run the pipeline now? This will cost API credits.")) return;
+  // "ingest" = collect new articles + extract atomic claims into
+  // claims_raw.csv. The AI verdict step is deliberately NOT run here —
+  // you triage claims by hand first, then the verdict stage fires
+  // separately (either on a schedule or via a future dedicated button).
+  if (!confirm("Fetch new articles and extract claims into Claims Raw?")) return;
   $("#btnRun").disabled = true;
   try {
-    await api("/api/trigger", { method: "POST", body: JSON.stringify({ stage: "all" }) });
-    toast("Pipeline triggered — new commit will appear in ~5–15 min.", "ok");
+    await api("/api/trigger", { method: "POST", body: JSON.stringify({ stage: "ingest" }) });
+    toast("Fetch started — new claims will appear in ~5–15 min.", "ok");
   } catch (e) {
     toast("Trigger failed: " + e.message, "err");
   } finally {
     setTimeout(() => { $("#btnRun").disabled = false; }, 5000);
+  }
+});
+
+// "verdict" = run the AI fact-checker over every pending row in
+// sent_to_verify.csv. THIS costs real API credits (web search + a
+// reasoning model per claim) so we double-confirm before firing.
+$("#btnVerify").addEventListener("click", async () => {
+  const pending = (state.data.sent_to_verify || [])
+    .filter(r => (r.status || "") === "pending").length;
+  if (!pending) {
+    toast("Nothing to verify — Sent to Verify has no pending rows.", "err");
+    return;
+  }
+  if (!confirm(
+    `Run the AI verdict on ${pending} pending claim${pending === 1 ? "" : "s"}?\n\n` +
+    `This calls the reasoning model + web search for each claim and costs API credits.`
+  )) return;
+
+  $("#btnVerify").disabled = true;
+  try {
+    await api("/api/trigger", { method: "POST", body: JSON.stringify({ stage: "verdict" }) });
+    toast("Verdicts started — results will appear in ~5–15 min.", "ok");
+  } catch (e) {
+    toast("Trigger failed: " + e.message, "err");
+  } finally {
+    setTimeout(() => { $("#btnVerify").disabled = false; }, 5000);
   }
 });
 
