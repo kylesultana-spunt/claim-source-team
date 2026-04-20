@@ -1,10 +1,15 @@
 name: spunt-pipeline
 
 on:
-  # Auto-schedule disabled for now to keep API costs under control.
-  # Uncomment the two lines below to run automatically every 12 hours.
-  # schedule:
-  #   - cron: "0 */12 * * *"
+  # Auto-run twice a day at roughly 8am and 8pm Malta time.
+  # GitHub cron is in UTC. Malta is UTC+2 in summer (CEST) and UTC+1 in
+  # winter (CET), so the local time will drift by about an hour twice a
+  # year — still morning and evening, just not exactly 08:00/20:00.
+  #  06:00 UTC = 08:00 CEST / 07:00 CET
+  #  18:00 UTC = 20:00 CEST / 19:00 CET
+  # Also: scheduled runs can be delayed 5–15 min by GitHub under load.
+  schedule:
+    - cron: "0 6,18 * * *"
   # Manual runs from the GitHub UI (Actions → Run workflow) or from admin.html
   workflow_dispatch:
     inputs:
@@ -13,7 +18,7 @@ on:
         required: true
         default: "all"
         type: choice
-        options: [collect, extract, analyse, verdict, all]
+        options: [collect, extract, analyse, verdict, ingest, all]
 
 permissions:
   contents: write  # needed to commit updated CSVs back to the repo
@@ -55,7 +60,18 @@ jobs:
           SPUNT_MODEL_REASONING: ${{ vars.SPUNT_MODEL_REASONING || 'claude-sonnet-4-6' }}
           SPUNT_MODEL_VERDICT:   ${{ vars.SPUNT_MODEL_VERDICT   || 'claude-sonnet-4-6' }}
         run: |
-          STAGE="${{ github.event.inputs.stage || 'all' }}"
+          # Scheduled runs (cron) only do the cheap ingestion stages.
+          # Manual runs (workflow_dispatch) use whatever the user picked
+          # in the dropdown, defaulting to 'ingest' if somehow nothing is
+          # picked. The expensive 'verdict' stage has to be triggered
+          # explicitly.
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            STAGE="ingest"
+          else
+            STAGE="${{ github.event.inputs.stage }}"
+            STAGE="${STAGE:-ingest}"
+          fi
+          echo "Running stage: $STAGE"
           python -m spunt "$STAGE" --root . -v
 
       - name: Commit updated data
