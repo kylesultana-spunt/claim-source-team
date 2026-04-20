@@ -189,7 +189,8 @@
     <span class="meta" id="lastRun">—</span>
     <button class="btn" id="btnRefresh" title="Reload data from CSV">↻ Reload</button>
     <button class="btn" id="btnAdd">+ Add claim</button>
-    <button class="btn primary" id="btnRun">▶ Run pipeline</button>
+    <button class="btn primary" id="btnIngest" title="Pull new articles, extract claims, sort them — no verdicts, cheap and fast">▶ Fetch new claims</button>
+    <button class="btn" id="btnVerdict" title="Generate automated verdicts for approved claims — slow and uses API credits">🔍 Run verdicts</button>
     <button class="btn" id="btnLogout" title="Sign out">↪</button>
   </div>
 </header>
@@ -741,18 +742,37 @@ $("#btnSubmitAdd").addEventListener("click", async () => {
 });
 
 // ---------------------------------------------------------------- run pipeline
-$("#btnRun").addEventListener("click", async () => {
-  if (!confirm("Run the pipeline now? This will cost API credits.")) return;
-  $("#btnRun").disabled = true;
+// Two separate triggers:
+//   • Fetch new claims → runs the cheap "ingest" stages (collect + extract + analyse)
+//   • Run verdicts     → runs only the expensive "verdict" stage
+// Scheduled auto-runs at 8am/8pm Malta time also do "ingest".
+async function triggerStage(stage, btnId, confirmMsg, okMsg) {
+  if (!confirm(confirmMsg)) return;
+  const btn = $("#" + btnId);
+  btn.disabled = true;
   try {
-    await api("/api/trigger", { method: "POST", body: JSON.stringify({ stage: "all" }) });
-    toast("Pipeline triggered — new commit will appear in ~5–15 min.", "ok");
+    await api("/api/trigger", { method: "POST", body: JSON.stringify({ stage }) });
+    toast(okMsg, "ok");
   } catch (e) {
     toast("Trigger failed: " + e.message, "err");
   } finally {
-    setTimeout(() => { $("#btnRun").disabled = false; }, 5000);
+    setTimeout(() => { btn.disabled = false; }, 5000);
   }
-});
+}
+
+$("#btnIngest").addEventListener("click", () => triggerStage(
+  "ingest",
+  "btnIngest",
+  "Fetch new claims now? This pulls news, extracts claims, and sorts them. No verdicts. Cheap and fast.",
+  "Ingest triggered — new claims will appear in ~2–5 min."
+));
+
+$("#btnVerdict").addEventListener("click", () => triggerStage(
+  "verdict",
+  "btnVerdict",
+  "Run automated verdicts now? This is slow (~5 min) and uses API credits. Proceed?",
+  "Verdicts triggered — results will appear in ~5–15 min."
+));
 
 $("#btnRefresh").addEventListener("click", loadAll);
 </script>
