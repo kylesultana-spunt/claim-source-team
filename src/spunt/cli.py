@@ -5,7 +5,9 @@ Commands:
     extract  - turn inbox articles into pending atomic claims
     analyse  - classify pending claims into the three queues
     verdict  - generate automated verdicts for approved_for_check claims
-    all      - run the full pipeline in order
+    ingest   - collect + extract + analyse (no verdict step — cheap/fast,
+               used by the twice-daily scheduled run)
+    all      - run the full pipeline in order, including verdicts
 """
 from __future__ import annotations
 
@@ -54,7 +56,8 @@ def cmd_verdict(p) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(prog="spunt")
     parser.add_argument("command",
-                        choices=["collect", "extract", "analyse", "verdict", "all"])
+                        choices=["collect", "extract", "analyse", "verdict",
+                                 "ingest", "all"])
     parser.add_argument("--root", default=".",
                         help="Project root (contains data/ and config/)")
     parser.add_argument("-v", "--verbose", action="store_true")
@@ -76,6 +79,10 @@ def main() -> None:
         cmd_analyse(p)
     elif args.command == "verdict":
         cmd_verdict(p)
+    elif args.command == "ingest":
+        cmd_collect(p)
+        cmd_extract(p)
+        cmd_analyse(p)
     elif args.command == "all":
         cmd_collect(p)
         cmd_extract(p)
