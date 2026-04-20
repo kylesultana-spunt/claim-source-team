@@ -1,8 +1,10 @@
 name: spunt-pipeline
 
 on:
+  # Every 4 hours during the election cycle
   schedule:
     - cron: "0 */4 * * *"
+  # Manual runs from the GitHub UI (Actions → Run workflow)
   workflow_dispatch:
     inputs:
       stage:
@@ -13,9 +15,10 @@ on:
         options: [collect, extract, analyse, verdict, all]
 
 permissions:
-  contents: write
+  contents: write  # needed to commit updated CSVs back to the repo
 
 concurrency:
+  # Serialize runs so two scheduled workflows can't race on the CSV writes.
   group: spunt-pipeline
   cancel-in-progress: false
 
@@ -23,10 +26,12 @@ jobs:
   run:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          # We need a real commit, not a detached HEAD, so we can push back.
           persist-credentials: true
           fetch-depth: 1
 
@@ -43,6 +48,7 @@ jobs:
 
       - name: Run pipeline
         env:
+          PYTHONPATH: src
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           SPUNT_MODEL_BULK:      ${{ vars.SPUNT_MODEL_BULK      || 'claude-haiku-4-5-20251001' }}
           SPUNT_MODEL_REASONING: ${{ vars.SPUNT_MODEL_REASONING || 'claude-sonnet-4-6' }}
@@ -55,6 +61,7 @@ jobs:
         run: |
           git config user.name  "spunt-bot"
           git config user.email "spunt-bot@users.noreply.github.com"
+          # Only commit the data dir; source/config changes come via PR.
           git add data/
           if git diff --cached --quiet; then
             echo "No data changes — nothing to commit."
