@@ -17,6 +17,7 @@ or dismiss). Verdict generation reads sent_to_verify.csv, not this file.
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 from typing import Dict, List
 
@@ -27,6 +28,78 @@ from .schema import CLAIMS_COLS, INBOX_COLS, utc_stamp
 from .storage import read_csv, write_csv_atomic
 
 log = logging.getLogger("spunt.extractor")
+
+
+# ---------------------------------------------------------------- attribution validator
+# Every atomic_claim must either (a) name its speaker inside the sentence
+# and include an attribution verb, or (b) be an article-level factual
+# assertion with speaker="unknown". Anything else is naked narration —
+# useless to a fact-check editor because they can't tell who to verify.
+#
+# This guard catches LLM slips where `speaker` is filled in but the
+# `atomic_claim` text is still written as third-person narration.
+_ATTRIBUTION_VERBS = re.compile(
+    r"\b("
+    r"said|says|say|"
+    r"claim(?:s|ed|ing)?|"
+    r"announc(?:e|es|ed|ing)|"
+    r"told|tells|telling|"
+    r"promis(?:e|es|ed|ing)|pledg(?:e|es|ed|ing)|"
+    r"stat(?:e|es|ed|ing)|declar(?:e|es|ed|ing)|"
+    r"argu(?:e|es|ed|ing)|insist(?:s|ed|ing)?|"
+    r"deni(?:es|ed|ing)|deny|"
+    r"confirm(?:s|ed|ing)?|"
+    r"warn(?:s|ed|ing)?|"
+    r"report(?:s|ed|ing)?|"
+    r"describ(?:e|es|ed|ing)|"
+    r"accus(?:e|es|ed|ing)|"
+    r"criticis(?:e|es|ed|ing)|"
+    r"call(?:s|ed|ing)?(?:\s+for)?"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _speaker_tokens(speaker: str) -> List[str]:
+    """Return the distinctive words from a speaker name, lowercased.
+
+    Drops 1-2 character tokens and common titles so we match against the
+    parts of the name most likely to appear in the atomic_claim ("Abela"
+    from "Robert Abela", "Ministry" from "The Ministry of Finance").
+    """
+    drop = {"the", "a", "an", "of", "for", "and",
+            "dr", "dr.", "mr", "mr.", "mrs", "ms", "hon"}
+    out: List[str] = []
+    for w in re.split(r"[\s,.]+", speaker.strip()):
+        lw = w.lower()
+        if len(lw) < 2 or lw in drop:
+            continue
+        out.append(lw)
+    return out
+
+
+def _is_attributed(atomic: str, speaker: str) -> bool:
+    """True if the atomic_claim is a valid attributed sentence.
+
+    Rules:
+    - If speaker is missing or 'unknown', allow the row (article-level
+      factual assertion — covered separately by content filters).
+    - Otherwise require BOTH:
+      (a) at least one distinctive token of the speaker appears in the
+          atomic_claim text, AND
+      (b) an attribution verb appears in the text.
+    """
+    atomic = (atomic or "").strip()
+    if not atomic:
+        return False
+    sp = (speaker or "").strip().lower()
+    if not sp or sp == "unknown":
+        return True  # unattributed factual assertion — allowed, sparingly
+    tokens = _speaker_tokens(speaker)
+    atomic_l = atomic.lower()
+    speaker_present = any(tok in atomic_l for tok in tokens)
+    verb_present = bool(_ATTRIBUTION_VERBS.search(atomic))
+    return speaker_present and verb_present
 
 
 def _politicians_table(politicians: List[Dict]) -> str:
@@ -97,6 +170,21 @@ def run(inbox_path: Path, sources_path: Path, claims_path: Path,
         for claim in result.get("claims", []):
             atomic = (claim.get("atomic_claim") or "").strip()
             if not atomic:
+                continue
+            speaker = (claim.get("speaker") or "").strip()
+            # Attribution guard — drop naked narration that slipped through
+            # the prompt. See _is_attributed() above for the full rule.
+            if not _is_attributed(atomic, speaker):
+                log.info("dropping non-attributed claim: speaker=%r atomic=%r",
+                         speaker, atomic[:120])
+                continue
+            # Fact-check-worthiness guard — drop event narratives, status
+            # updates, NGO self-descriptions, rhetoric, etc. The LLM tags
+            # these in the extract prompt; we enforce here. See
+            # config/prompts/extract.md → "Fact-check-worthiness" for rules.
+            if claim.get("fact_check_worthy") is not True:
+                log.info("dropping non-fact-check-worthy claim: speaker=%r atomic=%r",
+                         speaker, atomic[:120])
                 continue
             if is_near_duplicate(atomic, existing_claims):
                 continue
