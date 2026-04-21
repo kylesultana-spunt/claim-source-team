@@ -1,9 +1,22 @@
 # Maltese news sources monitored for political claims.
-# - `rss`: preferred RSS feed URL.
-# - `site`: landing page, used as the fallback when RSS is missing.
+#
+# The collector fans out to THREE discovery paths per source and merges the
+# results (deduped by URL) before filtering and fetching. This makes the
+# pipeline robust to any single path being blocked by Cloudflare or dropped.
+#
+# Per-source keys:
+# - `rss`: preferred RSS feed URL.       (path 1: site's own RSS)
+# - `site`: landing page.                (used for RSS auto-discovery,
+#                                         Google News queries, and sitemap
+#                                         auto-discovery)
+# - `sitemap`: optional override.        (path 3: news sitemap — if omitted,
+#                                         the collector tries common paths
+#                                         like /sitemap-news.xml)
 # - `political_only`: if true, use all items; if false, filter by keyword/section.
 # - `sections`: URL path prefixes to keep (for outlets that publish broadly).
 # - `keywords`: extra keyword whitelist (lowercased match in title/summary).
+#
+# Google News (path 2) is auto-derived from the `site` hostname — no config.
 
 sources:
   - name: Newsbook
